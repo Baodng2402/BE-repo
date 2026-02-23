@@ -26,7 +26,6 @@ async function bootstrap() {
   // Swagger setup
   const swaggerConfig = getDocumentBuilder();
   const documentFactory = SwaggerModule.createDocument(app, swaggerConfig);
-
   SwaggerModule.setup('api-docs', app, documentFactory, swaggerUiOptions);
 
   const port = process.env.PORT ?? 3000;
