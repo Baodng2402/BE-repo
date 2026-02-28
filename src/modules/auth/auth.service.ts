@@ -1,3 +1,4 @@
+import { HttpService } from '@nestjs/axios';
 import {
   BadRequestException,
   ConflictException,
@@ -6,18 +7,17 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
+import * as bcrypt from 'bcrypt';
 import { Repository } from 'typeorm';
+import { ERROR_MESSAGES, SUCCESS_MESSAGES } from '../../common/constants';
 import {
-  User,
-  IntegrationToken,
   AuthProvider,
   IntegrationProvider,
+  IntegrationToken,
+  User,
 } from '../../entities';
-import { ERROR_MESSAGES, SUCCESS_MESSAGES } from '../../common/constants';
-import * as bcrypt from 'bcrypt';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
-import { HttpService } from '@nestjs/axios';
 
 export interface JwtPayload {
   sub: string; // userId
@@ -87,6 +87,23 @@ export interface GitHubUserEmail {
   primary: boolean;
   verified: boolean;
   visibility?: string;
+}
+
+export interface JiraTokenResponse {
+  access_token: string;
+  expires_in: number;
+  scope: string;
+  refresh_token?: string;
+}
+
+export interface JiraUserProfile {
+  account_id: string;
+  name: string;
+  email: string;
+  picture: string;
+  account_type: string;
+  account_status: string;
+  extended_profile: any;
 }
 
 @Injectable()
@@ -270,6 +287,13 @@ export class AuthService {
     );
 
     if (existingIntegration) {
+      await this.linkOAuthAccount(
+        existingIntegration.user.id,
+        provider,
+        profile,
+        accessToken,
+        refreshToken,
+      );
       return existingIntegration.user;
     }
 
@@ -416,6 +440,81 @@ export class AuthService {
       const methodName = this.handleGitHubCallback.name;
       console.error(`[${serviceName} - ${methodName}]`, error);
       throw new BadRequestException(ERROR_MESSAGES.AUTH.GITHUB_OAUTH_FAILED);
+    }
+  }
+
+  // ============ Jira OAuth Manual Flow ============
+
+  async handleJiraCallback(code: string) {
+    const clientId = this.configService.get<string>('JIRA_CLIENT_ID');
+    const clientSecret = this.configService.get<string>('JIRA_CLIENT_SECRET');
+    const redirectUri = this.configService.get<string>('JIRA_CALLBACK_URL');
+
+    if (!clientId || !clientSecret || !redirectUri) {
+      throw new BadRequestException('Jira credentials not configured properly');
+    }
+
+    try {
+      const tokenResponse =
+        await this.httpService.axiosRef.post<JiraTokenResponse>(
+          'https://auth.atlassian.com/oauth/token',
+          {
+            grant_type: 'authorization_code',
+            client_id: clientId,
+            client_secret: clientSecret,
+            code,
+            redirect_uri: redirectUri,
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          },
+        );
+
+      const tokenData: JiraTokenResponse = tokenResponse.data;
+
+      if (!tokenData.access_token) {
+        throw new BadRequestException('Jira token exchange failed');
+      }
+
+      const profileResponse =
+        await this.httpService.axiosRef.get<JiraUserProfile>(
+          'https://api.atlassian.com/me',
+          {
+            headers: {
+              Authorization: `Bearer ${tokenData.access_token}`,
+              Accept: 'application/json',
+            },
+          },
+        );
+
+      const profile: JiraUserProfile = profileResponse.data;
+
+      const oauthProfile: OAuthProfile = {
+        id: profile.account_id,
+        username: profile.name,
+        email: profile.email,
+        displayName: profile.name,
+        photos: profile.picture ? [{ value: profile.picture }] : [],
+      };
+
+      const user = await this.findOrCreateOAuthUser(
+        IntegrationProvider.JIRA,
+        oauthProfile,
+        tokenData.access_token,
+        tokenData.refresh_token,
+      );
+
+      return user;
+    } catch (error: any) {
+      const serviceName = this.constructor.name;
+      const methodName = this.handleJiraCallback.name;
+      console.error(
+        `[${serviceName} - ${methodName}]`,
+        error?.response?.data || error.message,
+      );
+      throw new BadRequestException('Jira OAuth failed');
     }
   }
 

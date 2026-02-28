@@ -22,10 +22,10 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { IntegrationProvider } from '../../entities';
-import { ERROR_MESSAGES } from '../../common/constants';
 import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
+import { ERROR_MESSAGES } from '../../common/constants';
+import { IntegrationProvider } from '../../entities';
 import { RedisService } from '../../redis/redis.service';
 import {
   AuthResponse,
@@ -97,7 +97,11 @@ export class AuthController {
       .get<string>('ALLOWED_CORS_ORIGINS')
       ?.split(',') || ['http://localhost:3000', 'http://localhost:5173'];
 
-    if (!redirectUri || !allowedOrigins.includes(redirectUri)) {
+    const isValidRedirectUri = allowedOrigins.some((origin) =>
+      redirectUri?.startsWith(origin),
+    );
+
+    if (!redirectUri || !isValidRedirectUri) {
       throw new BadRequestException(ERROR_MESSAGES.AUTH.INVALID_REDIRECT_URI);
     }
 
@@ -159,29 +163,82 @@ export class AuthController {
     res.redirect(`${redirectUri}/auth/callback`);
   }
 
-  // ============ Jira OAuth (DISABLED - Requires HTTPS) ============
-  // TODO: Enable when domain + HTTPS is configured
-  // Jira/Atlassian requires HTTPS callback URLs
+  // ============ Jira OAuth ============
 
-  /*
   @Get('jira')
+  @UseGuards(OptionalJwtAuthGuard)
   @ApiOperation({
-    summary: 'Initiate Jira/Atlassian OAuth flow (❌ DISABLED - Requires HTTPS)',
+    summary: 'Initiate Jira/Atlassian OAuth flow',
     description:
-      '<b>Note:</b> Jira OAuth is currently disabled. Atlassian requires HTTPS callback URLs. Please configure a domain with SSL certificate first.',
+      '<b>Note:</b> Open this URL in a new browser tab to authenticate with Jira.',
   })
-  @ApiResponse({ status: 501, description: 'Not implemented - requires HTTPS' })
-  async jiraAuth() {
-    throw new BadRequestException('Jira OAuth requires HTTPS. Please configure domain + SSL first.');
+  @ApiResponse({ status: 302, description: 'Redirects to Jira OAuth' })
+  async jiraAuth(
+    @Query('redirect_uri') redirectUri: string,
+    @Res() res: Response,
+  ) {
+    const allowedOrigins = this.configService
+      .get<string>('ALLOWED_CORS_ORIGINS')
+      ?.split(',') || ['http://localhost:3000', 'http://localhost:5173'];
+
+    const isValidRedirectUri = allowedOrigins.some((origin) =>
+      redirectUri?.startsWith(origin),
+    );
+
+    if (!redirectUri || !isValidRedirectUri) {
+      throw new BadRequestException(ERROR_MESSAGES.AUTH.INVALID_REDIRECT_URI);
+    }
+
+    const state = randomUUID();
+    await this.redisService.setOAuthState(state, redirectUri);
+
+    const clientId = this.configService.get<string>('JIRA_CLIENT_ID');
+    const callbackUrl = this.configService.get<string>('JIRA_CALLBACK_URL', '');
+    const scope =
+      'read:jira-work read:jira-user read:me read:account offline_access';
+
+    const jiraAuthUrl = `https://auth.atlassian.com/authorize?audience=api.atlassian.com&client_id=${clientId}&scope=${encodeURIComponent(scope)}&redirect_uri=${encodeURIComponent(callbackUrl)}&state=${state}&response_type=code&prompt=consent`;
+
+    res.redirect(jiraAuthUrl);
   }
 
   @Get('jira/callback')
-  @ApiOperation({ summary: 'Jira OAuth callback (DISABLED)' })
-  @ApiResponse({ status: 501, description: 'Not implemented - requires HTTPS' })
-  jiraCallback(@Req() req: Request, @Res() res: Response) {
-    throw new BadRequestException('Jira OAuth requires HTTPS. Please configure domain + SSL first.');
+  @ApiOperation({ summary: 'Jira OAuth callback (internal use)' })
+  @ApiResponse({
+    status: 302,
+    description: 'Sets auth cookie and redirects to frontend',
+  })
+  async jiraCallback(
+    @Query('code') code: string,
+    @Query('state') state: string,
+    @Res() res: Response,
+  ) {
+    if (!code || code.length === 0 || !state || state.length === 0) {
+      throw new BadRequestException(ERROR_MESSAGES.AUTH.MISSING_PARAMETER);
+    }
+
+    const redirectUri = await this.redisService.getOAuthState(state);
+
+    if (!redirectUri) {
+      throw new BadRequestException(ERROR_MESSAGES.AUTH.INVALID_OAUTH_STATE);
+    }
+
+    await this.redisService.deleteOAuthState(state);
+
+    const user = await this.authService.handleJiraCallback(code);
+    const token = this.authService.generateJwtToken(user);
+
+    const isProduction =
+      this.configService.get<string>('NODE_ENV') === 'production';
+    res.cookie('auth_token', token, {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'strict' : 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.redirect(`${redirectUri}/auth/callback`);
   }
-  */
 
   // ============ Account Management ============
 
