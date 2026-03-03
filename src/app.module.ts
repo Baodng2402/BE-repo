@@ -5,11 +5,15 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HealthController } from './health/health.controller';
 import { AuthModule } from './modules/auth/auth.module';
+import { ClassModule } from './modules/class/class.module';
+import { DocumentSubmissionModule } from './modules/document-submission/document-submission.module';
 import { GithubModule } from './modules/github/github.module';
 import { GroupsModule } from './modules/groups/groups.module';
-import { UsersModule } from './modules/users/users.module';
 import { JiraModule } from './modules/jira/jira.module';
-
+import { NotificationModule } from './modules/notification/notification.module';
+import { ReportModule } from './modules/report/report.module';
+import { TopicModule } from './modules/topic/topic.module';
+import { UsersModule } from './modules/users/users.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -32,6 +36,11 @@ import { JiraModule } from './modules/jira/jira.module';
     GroupsModule,
     GithubModule,
     JiraModule,
+    ClassModule,
+    NotificationModule,
+    DocumentSubmissionModule,
+    TopicModule,
+    ReportModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],

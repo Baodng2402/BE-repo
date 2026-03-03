@@ -120,6 +120,49 @@ export class JiraService {
     }
   }
 
+  async getProjectIssues(userId: string, projectId: string): Promise<any[]> {
+    const token = await this.integrationTokenRepository.findOne({
+      where: { user_id: userId, provider: IntegrationProvider.JIRA },
+    });
+
+    if (!token || !token.access_token) {
+      throw new BadRequestException('Jira account is not linked for this user');
+    }
+
+    try {
+      const cloudId = await this.getJiraCloudId(token.access_token);
+
+      // Perform a JQL search to pull issues belonging to this project
+      const response = await lastValueFrom(
+        this.httpService.get(
+          `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/search`,
+          {
+            headers: {
+              Authorization: `Bearer ${token.access_token}`,
+              Accept: 'application/json',
+            },
+            params: {
+              jql: `project = "${projectId}"`,
+              maxResults: 100,
+            },
+          },
+        ),
+      );
+
+      const issues = response.data.issues || [];
+      return issues.map((issue: any) => ({
+        key: issue.key,
+        summary: issue.fields?.summary,
+        status: issue.fields?.status?.name,
+        assignee: issue.fields?.assignee,
+        issueType: issue.fields?.issuetype?.name,
+      }));
+    } catch (error: any) {
+      console.error('Jira API error fetching project issues:', error.message);
+      throw new BadRequestException('Failed to fetch Jira project issues');
+    }
+  }
+
   async linkProject(
     userId: string,
     githubRepoFullName: string,
