@@ -11,11 +11,11 @@ export interface StudentRow {
 const MAX_ROWS = 50;
 const REQUIRED_COLUMNS = ['email', 'student_id', 'full_name'];
 
-const CSV_MIME_TYPES = ['text/csv', 'application/csv'];
-const XLSX_MIME_TYPES = [
+const CSV_MIME_TYPES = new Set(['text/csv', 'application/csv']);
+const XLSX_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'application/vnd.ms-excel',
-];
+]);
 
 export async function parseStudentFile(
   buffer: Buffer,
@@ -23,9 +23,9 @@ export async function parseStudentFile(
 ): Promise<StudentRow[]> {
   let rows: StudentRow[];
 
-  if (CSV_MIME_TYPES.includes(mimeType)) {
+  if (CSV_MIME_TYPES.has(mimeType)) {
     rows = parseCsv(buffer);
-  } else if (XLSX_MIME_TYPES.includes(mimeType)) {
+  } else if (XLSX_MIME_TYPES.has(mimeType)) {
     rows = await parseXlsx(buffer);
   } else {
     throw new BadRequestException(
@@ -61,7 +61,7 @@ function parseCsv(buffer: Buffer): StudentRow[] {
 
 async function parseXlsx(buffer: Buffer): Promise<StudentRow[]> {
   const workbook = new Workbook();
-  await workbook.xlsx.load(buffer);
+  await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
   const sheet = workbook.worksheets[0];
 
   if (!sheet || sheet.rowCount < 2) {

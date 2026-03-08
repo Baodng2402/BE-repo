@@ -40,7 +40,7 @@ import { UsersModule } from './modules/users/users.module';
         connection: {
           host: configService.get<string>('REDIS_HOST', 'localhost'),
           port: parseInt(configService.get<string>('REDIS_PORT', '6379'), 10),
-          password: configService.get<string>('REDIS_PASSWORD', undefined),
+          password: configService.get<string>('REDIS_PASSWORD', ''),
         },
       }),
     }),
