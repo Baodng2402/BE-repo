@@ -1,9 +1,11 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
 import { In, Repository } from 'typeorm';
 import { ClassMembership } from '../../entities/class-membership.entity';
@@ -11,11 +13,20 @@ import { Class } from '../../entities/class.entity';
 import { Group } from '../../entities/group.entity';
 import { Notification } from '../../entities/notification.entity';
 import { User } from '../../entities/user.entity';
+import { MailService } from '../mail/mail.service';
+import { classEnrollmentEmail } from '../mail/templates/class-enrollment';
 import { CreateClassDto } from './dto/create-class.dto';
+import {
+  ImportFailedRow,
+  ImportStudentsResponseDto,
+} from './dto/import-students-response.dto';
 import { JoinClassDto } from './dto/join-class.dto';
+import { StudentRow } from './utils/file-parser.util';
 
 @Injectable()
 export class ClassService {
+  private readonly logger = new Logger(ClassService.name);
+
   constructor(
     @InjectRepository(Class)
     private readonly classRepo: Repository<Class>,
@@ -27,6 +38,7 @@ export class ClassService {
     private readonly notifRepo: Repository<Notification>,
     @InjectRepository(User)
     private readonly userRepo: Repository<User>,
+    private readonly mailService: MailService,
   ) {}
 
   async createClass(lecturerId: string, dto: CreateClassDto) {
@@ -117,5 +129,119 @@ export class ClassService {
 
     await this.classMembershipRepo.save(membership);
     return { message: 'Joined class successfully' };
+  }
+
+  async importStudents(
+    classId: string,
+    rows: StudentRow[],
+  ): Promise<ImportStudentsResponseDto> {
+    const targetClass = await this.classRepo.findOne({
+      where: { id: classId },
+      relations: ['lecturer'],
+    });
+    if (!targetClass) {
+      throw new NotFoundException('Class not found');
+    }
+
+    const result: ImportStudentsResponseDto = {
+      total: rows.length,
+      enrolled: 0,
+      created: 0,
+      already_enrolled: 0,
+      warnings: [],
+      failed: [],
+    };
+
+    if (rows.length < 15) {
+      result.warnings.push(
+        `Only ${rows.length} students — fewer than 15 expected. Proceeding anyway.`,
+      );
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+
+      if (!emailRegex.test(row.email)) {
+        result.failed.push({
+          row: i + 2, // +2: 1-indexed + header row
+          email: row.email,
+          reason: 'Invalid email format',
+        });
+        continue;
+      }
+
+      // Find or create user
+      let user = await this.userRepo.findOne({
+        where: { email: row.email },
+      });
+
+      const isNewUser = !user;
+      let tempPassword: string | undefined;
+
+      if (!user) {
+        tempPassword = randomBytes(4).toString('hex'); // 8-char alphanumeric
+        const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+        user = this.userRepo.create({
+          email: row.email,
+          student_id: row.student_id || null,
+          full_name: row.full_name || null,
+          password_hash: hashedPassword,
+        });
+        user = await this.userRepo.save(user);
+        result.created++;
+      }
+
+      // Check if already enrolled
+      const existingMembership = await this.classMembershipRepo.findOne({
+        where: { class_id: classId, user_id: user.id },
+      });
+
+      if (existingMembership) {
+        result.already_enrolled++;
+        continue;
+      }
+
+      // Enroll
+      const membership = this.classMembershipRepo.create({
+        class_id: classId,
+        user_id: user.id,
+      });
+      await this.classMembershipRepo.save(membership);
+      result.enrolled++;
+
+      // In-app notification (existing users only)
+      if (!isNewUser) {
+        const notification = this.notifRepo.create({
+          user_id: user.id,
+          title: `Enrolled in ${targetClass.code}`,
+          message: `You have been enrolled in ${targetClass.name}. Enrollment key: ${targetClass.enrollment_key}`,
+        });
+        await this.notifRepo.save(notification);
+      }
+
+      // Queue email (all students)
+      const emailContent = classEnrollmentEmail({
+        className: targetClass.name,
+        classCode: targetClass.code,
+        semester: targetClass.semester,
+        lecturerName: targetClass.lecturer?.full_name || 'Your Lecturer',
+        enrollmentKey: targetClass.enrollment_key,
+        tempPassword,
+      });
+      await this.mailService.queueEmail(
+        row.email,
+        emailContent.subject,
+        emailContent.html,
+      );
+    }
+
+    this.logger.log(
+      `Import complete for class ${classId}: ${result.enrolled} enrolled, ${result.created} created, ${result.already_enrolled} skipped`,
+    );
+
+    return result;
   }
 }

@@ -1,3 +1,4 @@
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -10,6 +11,7 @@ import { DocumentSubmissionModule } from './modules/document-submission/document
 import { GithubModule } from './modules/github/github.module';
 import { GroupsModule } from './modules/groups/groups.module';
 import { JiraModule } from './modules/jira/jira.module';
+import { MailModule } from './modules/mail/mail.module';
 import { NotificationModule } from './modules/notification/notification.module';
 import { ReportModule } from './modules/report/report.module';
 import { TopicModule } from './modules/topic/topic.module';
@@ -31,6 +33,17 @@ import { UsersModule } from './modules/users/users.module';
         logging: configService.get('NODE_ENV') === 'development',
       }),
     }),
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        connection: {
+          host: configService.get<string>('REDIS_HOST', 'localhost'),
+          port: parseInt(configService.get<string>('REDIS_PORT', '6379'), 10),
+          password: configService.get<string>('REDIS_PASSWORD', undefined),
+        },
+      }),
+    }),
     UsersModule,
     AuthModule,
     GroupsModule,
@@ -41,6 +54,7 @@ import { UsersModule } from './modules/users/users.module';
     DocumentSubmissionModule,
     TopicModule,
     ReportModule,
+    MailModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],

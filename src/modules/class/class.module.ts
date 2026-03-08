@@ -5,6 +5,7 @@ import { Class } from '../../entities/class.entity';
 import { Group } from '../../entities/group.entity';
 import { Notification } from '../../entities/notification.entity';
 import { User } from '../../entities/user.entity';
+import { MailModule } from '../mail/mail.module';
 import { ClassController } from './class.controller';
 import { ClassService } from './class.service';
 
@@ -17,6 +18,7 @@ import { ClassService } from './class.service';
       Notification,
       User,
     ]),
+    MailModule,
   ],
   providers: [ClassService],
   controllers: [ClassController],
