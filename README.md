@@ -95,7 +95,7 @@ docker-compose up -d
 docker exec -it wdp391-api npm run typeorm:migration:run
 
 # 5. Open Swagger documentation
-# Visit: http://localhost:3000/api-docs
+# Visit: http://localhost:3000/api/docs
 ```
 
 **That's it!** Your API is running at `http://localhost:3000`
@@ -134,7 +134,7 @@ npm run typeorm:migration:run
 npm run start:dev
 
 # 7. Open Swagger documentation
-# Visit: http://localhost:3000/api-docs
+# Visit: http://localhost:3000/api/docs
 ```
 
 ---
@@ -269,7 +269,7 @@ You can also connect to PostgreSQL using GUI tools:
 ### Using Swagger UI (Recommended)
 
 1. **Start the server** (if not already running)
-2. **Open Swagger**: http://localhost:3000/api-docs
+2. **Open Swagger**: http://localhost:3000/api/docs
 3. **Test Authentication Flow**:
 
 #### Step 1: Register a New User
@@ -333,7 +333,7 @@ OAuth flows require browser interaction and cannot be tested directly in Swagger
    - Visit: `http://localhost:3000/api/auth/github` (or `/jira`)
    - Authorize to link account
 
-For more testing scenarios, explore the Swagger UI interface at http://localhost:3000/api-docs
+For more testing scenarios, explore the Swagger UI interface at http://localhost:3000/api/docs
 
 ---
 
@@ -650,7 +650,7 @@ BE-repo/
 
 ## 🔗 Useful Links
 
-- **API Documentation (Swagger)**: http://localhost:3000/api-docs
+- **API Documentation (Swagger)**: http://localhost:3000/api/docs
 - **Health Check**: http://localhost:3000/health
 - **GitHub Repository**: https://github.com/WDP301-SP26/BE-repo
 

@@ -23,7 +23,7 @@ async function bootstrap() {
 
     // Enable CORS with dynamic origins from environment variable
     const allowedOrigins = configService
-      .get<string>('ALLOWED_ORIGINS')
+      .get<string>('ALLOWED_CORS_ORIGINS')
       ?.split(',') || ['http://localhost:3000', 'http://localhost:5173'];
 
     app.enableCors({
@@ -58,14 +58,14 @@ async function bootstrap() {
     // Swagger setup
     const swaggerConfig = getDocumentBuilder();
     const documentFactory = SwaggerModule.createDocument(app, swaggerConfig);
-    SwaggerModule.setup('api-docs', app, documentFactory, swaggerUiOptions);
+    SwaggerModule.setup('api/docs', app, documentFactory, swaggerUiOptions);
 
     const port = configService.get<number>('PORT', 3000);
 
     await app.listen(port);
 
     logger.log(`Application is running on: http://localhost:${port}`);
-    logger.log(`Swagger UI is available at: http://localhost:${port}/api-docs`);
+    logger.log(`Swagger UI is available at: http://localhost:${port}/api/docs`);
   } catch (error) {
     logger.error('Failed to start application', error);
     process.exit(1);
