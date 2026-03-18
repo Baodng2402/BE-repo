@@ -251,6 +251,16 @@ export class GroupsService {
       });
       if (!topic) throw new NotFoundException('Topic not found');
 
+      const topicAlreadyUsed = await this.groupRepository.exist({
+        where: { topic_id: dto.topic_id },
+      });
+
+      if (topicAlreadyUsed) {
+        throw new BadRequestException(
+          'This topic has already been selected by another group.',
+        );
+      }
+
       try {
         // Auto-provision Github Repo (Private)
         const repoName =
@@ -310,6 +320,26 @@ export class GroupsService {
         topic_id: dto.topic_id,
       },
     );
+
+    if (dto.topic_id && dto.topic_id !== group.topic_id) {
+      await this.topicRepository.update(
+        { id: dto.topic_id },
+        { is_taken: true },
+      );
+
+      if (group.topic_id) {
+        const stillReferenced = await this.groupRepository.exist({
+          where: { topic_id: group.topic_id },
+        });
+
+        if (!stillReferenced) {
+          await this.topicRepository.update(
+            { id: group.topic_id },
+            { is_taken: false },
+          );
+        }
+      }
+    }
 
     const updatedGroup = await this.findOneById(groupId);
     return this.formatGroupDetail(updatedGroup);
