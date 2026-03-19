@@ -14,6 +14,7 @@ import { JiraModule } from './modules/jira/jira.module';
 import { MailModule } from './modules/mail/mail.module';
 import { NotificationModule } from './modules/notification/notification.module';
 import { ReportModule } from './modules/report/report.module';
+import { SemesterModule } from './modules/semester/semester.module';
 import { TopicModule } from './modules/topic/topic.module';
 import { UsersModule } from './modules/users/users.module';
 @Module({
@@ -55,6 +56,7 @@ import { UsersModule } from './modules/users/users.module';
     TopicModule,
     ReportModule,
     MailModule,
+    SemesterModule,
   ],
   controllers: [AppController, HealthController],
   providers: [AppService],

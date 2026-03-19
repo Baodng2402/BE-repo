@@ -100,6 +100,22 @@ export class GroupsController {
     return this.groupsService.findOne(id, req.user.id, req.user.role as Role);
   }
 
+  @Get(':id/integration-status')
+  @ApiOperation({
+    summary: 'Get integration readiness for the current user and group',
+  })
+  @ApiParam({ name: 'id', description: 'Group UUID' })
+  async getIntegrationStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: AuthorizedRequest,
+  ) {
+    return this.groupsService.getIntegrationStatus(
+      id,
+      req.user.id,
+      req.user.role as Role,
+    );
+  }
+
   @Patch(':id')
   @ApiOperation({ summary: 'Update group info (leader or admin only)' })
   @ApiParam({ name: 'id', description: 'Group UUID' })
@@ -245,7 +261,12 @@ export class GroupsController {
     @Req() req: AuthorizedRequest,
     @Body() body: { repo_url: string; repo_name: string; repo_owner: string },
   ) {
-    return this.groupsService.addGroupRepo(id, req.user.id, body);
+    return this.groupsService.addGroupRepo(
+      id,
+      req.user.id,
+      req.user.role as Role,
+      body,
+    );
   }
 
   @Delete(':id/repos/:repoId')
@@ -258,7 +279,12 @@ export class GroupsController {
     @Param('repoId', ParseUUIDPipe) repoId: string,
     @Req() req: AuthorizedRequest,
   ) {
-    return this.groupsService.removeGroupRepo(id, repoId, req.user.id);
+    return this.groupsService.removeGroupRepo(
+      id,
+      repoId,
+      req.user.id,
+      req.user.role as Role,
+    );
   }
 
   @Get(':id/repos/:repoId/commits')

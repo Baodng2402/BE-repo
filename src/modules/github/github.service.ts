@@ -1,9 +1,10 @@
 import { HttpService } from '@nestjs/axios';
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { Injectable, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { lastValueFrom } from 'rxjs';
 import { Repository } from 'typeorm';
 import { IntegrationProvider, IntegrationToken } from '../../entities';
+import { createIntegrationException } from '../../common/errors/integration-error';
 
 interface GitHubRepo {
   id: number;
@@ -56,16 +57,86 @@ export class GithubService {
     private httpService: HttpService,
   ) {}
 
-  async getUserRepositories(userId: string) {
+  private async getRequiredToken(userId: string) {
     const token = await this.integrationTokenRepository.findOne({
       where: { user_id: userId, provider: IntegrationProvider.GITHUB },
     });
 
     if (!token || !token.access_token) {
-      throw new BadRequestException(
-        'GitHub account is not linked for this user',
-      );
+      throw createIntegrationException(HttpStatus.BAD_REQUEST, {
+        code: 'ACCOUNT_NOT_LINKED',
+        provider: IntegrationProvider.GITHUB,
+        message: 'GitHub account is not linked for this user.',
+        reconnectRequired: true,
+      });
     }
+
+    return token;
+  }
+
+  private async mapGitHubError(
+    error: any,
+    userId: string,
+    fallbackMessage: string,
+  ): Promise<never> {
+    const status = error?.response?.status;
+    const remaining = error?.response?.headers?.['x-ratelimit-remaining'];
+
+    if (status === 401) {
+      await this.integrationTokenRepository.delete({
+        user_id: userId,
+        provider: IntegrationProvider.GITHUB,
+      });
+      throw createIntegrationException(HttpStatus.UNAUTHORIZED, {
+        code: 'TOKEN_EXPIRED',
+        provider: IntegrationProvider.GITHUB,
+        message:
+          'GitHub token expired or is no longer valid. Please reconnect GitHub.',
+        reconnectRequired: true,
+      });
+    }
+
+    if (status === 403 && `${remaining}` === '0') {
+      throw createIntegrationException(HttpStatus.TOO_MANY_REQUESTS, {
+        code: 'RATE_LIMITED',
+        provider: IntegrationProvider.GITHUB,
+        message:
+          'GitHub rate limit reached. Please retry after the provider quota resets.',
+        retryable: true,
+      });
+    }
+
+    if (status === 403) {
+      throw createIntegrationException(HttpStatus.FORBIDDEN, {
+        code: 'INSUFFICIENT_SCOPE',
+        provider: IntegrationProvider.GITHUB,
+        message:
+          'GitHub access is missing required permissions for this action. Please reconnect GitHub with the required scopes.',
+        reconnectRequired: true,
+      });
+    }
+
+    if (status === 404) {
+      throw createIntegrationException(HttpStatus.NOT_FOUND, {
+        code: 'NOT_FOUND',
+        provider: IntegrationProvider.GITHUB,
+        message: 'The requested GitHub repository could not be found.',
+      });
+    }
+
+    throw createIntegrationException(HttpStatus.BAD_REQUEST, {
+      code: 'VALIDATION_ERROR',
+      provider: IntegrationProvider.GITHUB,
+      message: fallbackMessage,
+      details: {
+        providerMessage:
+          error?.response?.data?.message || error?.message || fallbackMessage,
+      },
+    });
+  }
+
+  async getUserRepositories(userId: string) {
+    const token = await this.getRequiredToken(userId);
 
     try {
       const response = await lastValueFrom(
@@ -98,34 +169,15 @@ export class GithubService {
       };
     } catch (error: any) {
       console.error('GitHub API error:', error.message);
-      if (
-        error.response?.status === 401 ||
-        error.response?.status === 403 ||
-        error.response?.status === 404
-      ) {
-        await this.integrationTokenRepository.delete({
-          user_id: userId,
-          provider: IntegrationProvider.GITHUB,
-        });
-        throw new BadRequestException(
-          'GitHub token expired or invalid scopes. Please re-link your GitHub account.',
-        );
-      }
-      throw new BadRequestException(
-        'Failed to fetch repositories from GitHub APIs',
+      return this.mapGitHubError(
+        error,
+        userId,
+        'Failed to fetch repositories from GitHub.',
       );
     }
   }
   async getRepoContributorsStats(userId: string, owner: string, repo: string) {
-    const token = await this.integrationTokenRepository.findOne({
-      where: { user_id: userId, provider: IntegrationProvider.GITHUB },
-    });
-
-    if (!token || !token.access_token) {
-      throw new BadRequestException(
-        'GitHub account is not linked for this user',
-      );
-    }
+    const token = await this.getRequiredToken(userId);
 
     try {
       let statsResponse: GitHubContributorStats[] = [];
@@ -185,31 +237,16 @@ export class GithubService {
         `GitHub API error fetching stats for ${owner}/${repo}:`,
         error.message,
       );
-      if (error.response?.status === 401 || error.response?.status === 403) {
-        await this.integrationTokenRepository.delete({
-          user_id: userId,
-          provider: IntegrationProvider.GITHUB,
-        });
-        throw new BadRequestException(
-          'GitHub token expired or invalid scopes. Please re-link your GitHub account.',
-        );
-      }
-      throw new BadRequestException(
-        'Failed to fetch contributor stats from GitHub API',
+      return this.mapGitHubError(
+        error,
+        userId,
+        `Failed to fetch contributor stats for ${owner}/${repo}.`,
       );
     }
   }
 
   async getRepoCommits(userId: string, owner: string, repo: string) {
-    const token = await this.integrationTokenRepository.findOne({
-      where: { user_id: userId, provider: IntegrationProvider.GITHUB },
-    });
-
-    if (!token || !token.access_token) {
-      throw new BadRequestException(
-        'GitHub account is not linked for this user',
-      );
-    }
+    const token = await this.getRequiredToken(userId);
 
     try {
       const response = await lastValueFrom(
@@ -239,16 +276,11 @@ export class GithubService {
         `GitHub API error fetching commits for ${owner}/${repo}:`,
         error.message,
       );
-      if (error.response?.status === 401 || error.response?.status === 403) {
-        await this.integrationTokenRepository.delete({
-          user_id: userId,
-          provider: IntegrationProvider.GITHUB,
-        });
-        throw new BadRequestException(
-          'GitHub token expired or invalid scopes. Please re-link your GitHub account.',
-        );
-      }
-      throw new BadRequestException('Failed to fetch commits from GitHub API');
+      return this.mapGitHubError(
+        error,
+        userId,
+        `Failed to fetch commits for ${owner}/${repo}.`,
+      );
     }
   }
 
@@ -257,15 +289,7 @@ export class GithubService {
     repoName: string,
     description: string,
   ) {
-    const token = await this.integrationTokenRepository.findOne({
-      where: { user_id: userId, provider: IntegrationProvider.GITHUB },
-    });
-
-    if (!token || !token.access_token) {
-      throw new BadRequestException(
-        'GitHub account is not linked for this user',
-      );
-    }
+    const token = await this.getRequiredToken(userId);
 
     try {
       const response = await lastValueFrom(
@@ -292,9 +316,10 @@ export class GithubService {
         'GitHub API error creating repository:',
         error?.response?.data || error.message,
       );
-      throw new BadRequestException(
-        'Failed to create repository on GitHub: ' +
-          (error?.response?.data?.message || error.message),
+      return this.mapGitHubError(
+        error,
+        userId,
+        'Failed to create repository on GitHub.',
       );
     }
   }
@@ -305,15 +330,7 @@ export class GithubService {
     repoName: string,
     targetGithubUsername: string,
   ) {
-    const token = await this.integrationTokenRepository.findOne({
-      where: { user_id: userId, provider: IntegrationProvider.GITHUB },
-    });
-
-    if (!token || !token.access_token) {
-      throw new BadRequestException(
-        'GitHub account is not linked for this user',
-      );
-    }
+    const token = await this.getRequiredToken(userId);
 
     try {
       const response = await lastValueFrom(
@@ -336,6 +353,42 @@ export class GithubService {
       );
       // It's okay if it fails (maybe the user didn't exist or already invited)
       return null;
+    }
+  }
+
+  async validateRepositoryAccess(userId: string, owner: string, repo: string) {
+    const token = await this.getRequiredToken(userId);
+
+    try {
+      const response = await lastValueFrom(
+        this.httpService.get<GitHubRepo>(
+          `https://api.github.com/repos/${owner}/${repo}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token.access_token}`,
+              Accept: 'application/vnd.github.v3+json',
+            },
+          },
+        ),
+      );
+
+      return {
+        id: response.data.id,
+        name: response.data.name,
+        full_name: response.data.full_name,
+        html_url: response.data.html_url,
+        private: response.data.private,
+      };
+    } catch (error: any) {
+      console.error(
+        `GitHub API error validating repo access for ${owner}/${repo}:`,
+        error?.response?.data || error.message,
+      );
+      return this.mapGitHubError(
+        error,
+        userId,
+        `Failed to validate access to ${owner}/${repo}.`,
+      );
     }
   }
 }

@@ -11,6 +11,8 @@ import {
   Group,
   GroupMembership,
   GroupRepository,
+  IntegrationProvider,
+  IntegrationToken,
   MembershipRole,
   Role,
   Topic,
@@ -37,6 +39,8 @@ export class GroupsService {
     private readonly topicRepository: Repository<Topic>,
     @InjectRepository(GroupRepository)
     private readonly groupRepoRepository: Repository<GroupRepository>,
+    @InjectRepository(IntegrationToken)
+    private readonly integrationTokenRepository: Repository<IntegrationToken>,
     private readonly githubService: GithubService,
     private readonly jiraService: JiraService,
   ) {}
@@ -243,6 +247,14 @@ export class GroupsService {
 
     let newGithubUrl = dto.github_repo_url;
     let newJiraKey = dto.jira_project_key;
+
+    if (dto.jira_project_key && dto.jira_project_key !== group.jira_project_key) {
+      const jiraProject = await this.jiraService.validateProjectAccess(
+        userId,
+        dto.jira_project_key,
+      );
+      newJiraKey = jiraProject.key;
+    }
 
     // Detect if a new topic is assigned, to trigger auto-provisioning
     if (dto.topic_id && dto.topic_id !== group.topic_id) {
@@ -604,6 +616,7 @@ export class GroupsService {
   async addGroupRepo(
     groupId: string,
     userId: string,
+    userRole: Role,
     data: { repo_url: string; repo_name: string; repo_owner: string },
   ) {
     // Verify the group exists
@@ -613,6 +626,8 @@ export class GroupsService {
     if (!group) {
       throw new NotFoundException('Group not found');
     }
+
+    await this.assertCanManageGroup(groupId, userId, userRole);
 
     // Check if repo already linked
     const existing = await this.groupRepoRepository.findOne({
@@ -624,18 +639,31 @@ export class GroupsService {
       );
     }
 
+    const validatedRepo = await this.githubService.validateRepositoryAccess(
+      userId,
+      data.repo_owner,
+      data.repo_name,
+    );
+
     const repo = this.groupRepoRepository.create({
       group_id: groupId,
-      repo_url: data.repo_url,
-      repo_name: data.repo_name,
-      repo_owner: data.repo_owner,
+      repo_url: validatedRepo.html_url,
+      repo_name: validatedRepo.name,
+      repo_owner: validatedRepo.full_name.split('/')[0],
       added_by_id: userId,
     });
 
     return this.groupRepoRepository.save(repo);
   }
 
-  async removeGroupRepo(groupId: string, repoId: string, userId: string) {
+  async removeGroupRepo(
+    groupId: string,
+    repoId: string,
+    userId: string,
+    userRole: Role,
+  ) {
+    await this.assertCanManageGroup(groupId, userId, userRole);
+
     const repo = await this.groupRepoRepository.findOne({
       where: { id: repoId, group_id: groupId },
     });
@@ -644,6 +672,74 @@ export class GroupsService {
     }
 
     await this.groupRepoRepository.delete({ id: repoId });
+  }
+
+  async getIntegrationStatus(groupId: string, userId: string, userRole: Role) {
+    const group = await this.findOne(groupId, userId, userRole);
+    const [githubToken, jiraToken, repos] = await Promise.all([
+      this.integrationTokenRepository.findOne({
+        where: { user_id: userId, provider: IntegrationProvider.GITHUB },
+      }),
+      this.integrationTokenRepository.findOne({
+        where: { user_id: userId, provider: IntegrationProvider.JIRA },
+      }),
+      this.groupRepoRepository.find({
+        where: { group_id: groupId },
+        order: { created_at: 'ASC' },
+      }),
+    ]);
+
+    const warnings: string[] = [];
+    if (!githubToken) {
+      warnings.push('GitHub account is not linked for the current user.');
+    }
+    if (!jiraToken) {
+      warnings.push('Jira account is not linked for the current user.');
+    }
+    if (repos.length === 0) {
+      warnings.push(
+        'No GitHub repository is linked to this group. Commit analytics will be empty.',
+      );
+    }
+    if (!group.jira_project_key) {
+      warnings.push(
+        'No Jira project is linked to this group. Assignment and SRS reports will be limited.',
+      );
+    }
+
+    return {
+      user: {
+        github: {
+          linked: !!githubToken,
+          provider: IntegrationProvider.GITHUB,
+          username: githubToken?.provider_username || null,
+          email: githubToken?.provider_email || null,
+        },
+        jira: {
+          linked: !!jiraToken,
+          provider: IntegrationProvider.JIRA,
+          username: jiraToken?.provider_username || null,
+          email: jiraToken?.provider_email || null,
+        },
+      },
+      group: {
+        id: group.id,
+        jiraProjectKey: group.jira_project_key,
+        linkedReposCount: repos.length,
+        repos: repos.map((repo) => ({
+          id: repo.id,
+          fullName: `${repo.repo_owner}/${repo.repo_name}`,
+          url: repo.repo_url,
+          isPrimary: repo.is_primary,
+        })),
+        reports: {
+          canGenerateSrs: !!group.jira_project_key,
+          canGenerateAssignments: !!group.jira_project_key,
+          canGenerateCommits: repos.length > 0,
+        },
+      },
+      warnings,
+    };
   }
 
   async getGroupRepoCommits(groupId: string, repoId: string) {

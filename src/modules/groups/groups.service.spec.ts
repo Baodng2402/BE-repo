@@ -10,6 +10,7 @@ import {
   GroupMembership,
   GroupRepository,
   GroupStatus,
+  IntegrationToken,
   MembershipRole,
   Role,
   Topic,
@@ -112,6 +113,22 @@ function createMockUserRepository() {
   };
 }
 
+function createMockGroupRepoRepository() {
+  return {
+    findOne: jest.fn(),
+    find: jest.fn(),
+    create: jest.fn((dto) => dto),
+    save: jest.fn(),
+    delete: jest.fn(),
+  };
+}
+
+function createMockIntegrationTokenRepository() {
+  return {
+    findOne: jest.fn(),
+  };
+}
+
 // ── Tests ────────────────────────────────────────────────
 
 describe('GroupsService', () => {
@@ -119,11 +136,21 @@ describe('GroupsService', () => {
   let groupRepo: ReturnType<typeof createMockGroupRepository>;
   let membershipRepo: ReturnType<typeof createMockMembershipRepository>;
   let userRepo: ReturnType<typeof createMockUserRepository>;
+  let groupRepositoryRepo: ReturnType<typeof createMockGroupRepoRepository>;
+  let integrationTokenRepo: ReturnType<
+    typeof createMockIntegrationTokenRepository
+  >;
+  let githubService: { validateRepositoryAccess: jest.Mock };
+  let jiraService: { validateProjectAccess: jest.Mock };
 
   beforeEach(async () => {
     groupRepo = createMockGroupRepository();
     membershipRepo = createMockMembershipRepository();
     userRepo = createMockUserRepository();
+    groupRepositoryRepo = createMockGroupRepoRepository();
+    integrationTokenRepo = createMockIntegrationTokenRepository();
+    githubService = { validateRepositoryAccess: jest.fn() };
+    jiraService = { validateProjectAccess: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -135,9 +162,16 @@ describe('GroupsService', () => {
         },
         { provide: getRepositoryToken(User), useValue: userRepo },
         { provide: getRepositoryToken(Topic), useValue: {} },
-        { provide: getRepositoryToken(GroupRepository), useValue: {} },
-        { provide: GithubService, useValue: {} },
-        { provide: JiraService, useValue: {} },
+        {
+          provide: getRepositoryToken(GroupRepository),
+          useValue: groupRepositoryRepo,
+        },
+        {
+          provide: getRepositoryToken(IntegrationToken),
+          useValue: integrationTokenRepo,
+        },
+        { provide: GithubService, useValue: githubService },
+        { provide: JiraService, useValue: jiraService },
       ],
     }).compile();
 
@@ -356,6 +390,26 @@ describe('GroupsService', () => {
       await expect(
         service.update('bad-id', USER_ID, Role.ADMIN, dto),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should validate Jira project key before saving', async () => {
+      groupRepo.findOne.mockResolvedValue(mockGroup);
+      membershipRepo.findOne.mockResolvedValue(mockMembership);
+      jiraService.validateProjectAccess.mockResolvedValue({ key: 'NEWKEY' });
+      groupRepo._qb.getOne.mockResolvedValue(mockGroupWithMembers);
+
+      await service.update(GROUP_ID, USER_ID, Role.STUDENT, {
+        jira_project_key: 'NEWKEY',
+      });
+
+      expect(jiraService.validateProjectAccess).toHaveBeenCalledWith(
+        USER_ID,
+        'NEWKEY',
+      );
+      expect(groupRepo.update).toHaveBeenCalledWith(
+        { id: GROUP_ID },
+        expect.objectContaining({ jira_project_key: 'NEWKEY' }),
+      );
     });
   });
 
@@ -710,6 +764,73 @@ describe('GroupsService', () => {
 
       await expect(service.leaveGroup(GROUP_ID, USER_ID)).rejects.toThrow(
         NotFoundException,
+      );
+    });
+  });
+
+  describe('addGroupRepo', () => {
+    beforeEach(() => {
+      groupRepo.findOne.mockResolvedValue(mockGroup);
+      membershipRepo.findOne.mockResolvedValue(mockMembership);
+    });
+
+    it('should validate repo access before linking', async () => {
+      groupRepositoryRepo.findOne.mockResolvedValue(null);
+      githubService.validateRepositoryAccess.mockResolvedValue({
+        name: 'repo',
+        full_name: 'org/repo',
+        html_url: 'https://github.com/org/repo',
+      });
+      groupRepositoryRepo.save.mockResolvedValue({
+        id: 'repo-id',
+        repo_name: 'repo',
+      });
+
+      await service.addGroupRepo(GROUP_ID, USER_ID, Role.STUDENT, {
+        repo_url: 'https://github.com/org/repo',
+        repo_name: 'repo',
+        repo_owner: 'org',
+      });
+
+      expect(githubService.validateRepositoryAccess).toHaveBeenCalledWith(
+        USER_ID,
+        'org',
+        'repo',
+      );
+      expect(groupRepositoryRepo.save).toHaveBeenCalled();
+    });
+  });
+
+  describe('getIntegrationStatus', () => {
+    it('should return user + group integration readiness', async () => {
+      groupRepo._qb.getOne.mockResolvedValue(mockGroupWithMembers);
+      integrationTokenRepo.findOne
+        .mockResolvedValueOnce({
+          provider_username: 'octocat',
+          provider_email: 'octo@example.com',
+        })
+        .mockResolvedValueOnce(null);
+      groupRepositoryRepo.find.mockResolvedValue([
+        {
+          id: 'repo-id',
+          repo_owner: 'org',
+          repo_name: 'repo',
+          repo_url: 'https://github.com/org/repo',
+          is_primary: true,
+        },
+      ]);
+
+      const result = await service.getIntegrationStatus(
+        GROUP_ID,
+        USER_ID,
+        Role.STUDENT,
+      );
+
+      expect(result.user.github.linked).toBe(true);
+      expect(result.user.jira.linked).toBe(false);
+      expect(result.group.linkedReposCount).toBe(1);
+      expect(result.warnings).toContain(
+        'Jira account is not linked for the current user.',
       );
     });
   });

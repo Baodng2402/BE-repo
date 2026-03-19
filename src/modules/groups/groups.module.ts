@@ -4,6 +4,7 @@ import {
   Group,
   GroupMembership,
   GroupRepository,
+  IntegrationToken,
   Topic,
   User,
 } from '../../entities';
@@ -18,6 +19,7 @@ import { GroupsService } from './groups.service';
       Group,
       GroupMembership,
       GroupRepository,
+      IntegrationToken,
       User,
       Topic,
     ]),

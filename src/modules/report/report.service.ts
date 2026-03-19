@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -36,6 +37,27 @@ export class ReportService {
       this.groq = new Groq({ apiKey });
     }
     return this.groq;
+  }
+
+  private extractErrorMessage(error: unknown, fallback: string) {
+    if (error instanceof HttpException) {
+      const response = error.getResponse() as
+        | { message?: string }
+        | string
+        | undefined;
+      if (typeof response === 'string') {
+        return response;
+      }
+      if (response?.message) {
+        return response.message;
+      }
+    }
+
+    if (error instanceof Error && error.message) {
+      return error.message;
+    }
+
+    return fallback;
   }
 
   async generateSrs(
@@ -111,9 +133,14 @@ Return only the markdown document. Do not add conversational text around it.`;
     if (!group) throw new NotFoundException('Group not found');
 
     if (!group.jira_project_key) {
-      throw new BadRequestException(
-        'This group has not linked a Jira project yet',
-      );
+      return {
+        groupName: group.name,
+        totalTasks: 0,
+        assignments: [],
+        warnings: [
+          'This group has not linked a Jira project yet. Assignment data is unavailable.',
+        ],
+      };
     }
 
     const leader = group.members?.find(
@@ -130,10 +157,22 @@ Return only the markdown document. Do not add conversational text around it.`;
       jiraTokenUserId,
     );
 
-    const rawJiraData = await this.jiraService.getProjectIssues(
-      jiraTokenUserId,
-      group.jira_project_key,
-    );
+    let rawJiraData: any[] = [];
+    const warnings: string[] = [];
+
+    try {
+      rawJiraData = await this.jiraService.getProjectIssues(
+        jiraTokenUserId,
+        group.jira_project_key,
+      );
+    } catch (error) {
+      warnings.push(
+        this.extractErrorMessage(
+          error,
+          'Failed to fetch Jira assignment data for this group.',
+        ),
+      );
+    }
 
     // Simplistic breakdown for frontend rendering
     const assignments = rawJiraData.map((issue: any) => ({
@@ -148,6 +187,7 @@ Return only the markdown document. Do not add conversational text around it.`;
       groupName: group.name,
       totalTasks: assignments.length,
       assignments,
+      warnings,
     };
   }
 
@@ -170,13 +210,19 @@ Return only the markdown document. Do not add conversational text around it.`;
       .getMany();
 
     if (!repos || repos.length === 0) {
-      throw new BadRequestException(
-        'This group has not linked any Github repositories yet',
-      );
+      return {
+        groupName: group.name,
+        repositories: [],
+        computing: false,
+        warnings: [
+          'This group has not linked any GitHub repositories yet. Commit analytics are unavailable.',
+        ],
+      };
     }
 
     const allStats: any[] = [];
     let anyComputing = false;
+    const warnings: string[] = [];
 
     // Fetch stats for all linked repositories
     for (const repo of repos) {
@@ -194,7 +240,12 @@ Return only the markdown document. Do not add conversational text around it.`;
           contributors: result.contributors,
         });
       } catch (e) {
-        // Skip failed ones quietly or log
+        warnings.push(
+          `${repo.repo_owner}/${repo.repo_name}: ${this.extractErrorMessage(
+            e,
+            'Failed to fetch commit analytics for this repository.',
+          )}`,
+        );
       }
     }
 
@@ -202,6 +253,7 @@ Return only the markdown document. Do not add conversational text around it.`;
       groupName: group.name,
       repositories: allStats,
       computing: anyComputing,
+      warnings,
     };
   }
 }

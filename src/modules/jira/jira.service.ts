@@ -1,5 +1,5 @@
 import { HttpService } from '@nestjs/axios';
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { Injectable, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { lastValueFrom } from 'rxjs';
 import { Repository } from 'typeorm';
@@ -8,6 +8,7 @@ import {
   IntegrationToken,
   ProjectLink,
 } from '../../entities';
+import { createIntegrationException } from '../../common/errors/integration-error';
 
 export interface JiraProject {
   id: string;
@@ -34,6 +35,86 @@ export class JiraService {
     private readonly projectLinkRepository: Repository<ProjectLink>,
     private readonly httpService: HttpService,
   ) {}
+
+  private async getRequiredToken(userId: string) {
+    const token = await this.integrationTokenRepository.findOne({
+      where: { user_id: userId, provider: IntegrationProvider.JIRA },
+    });
+
+    if (!token || !token.access_token) {
+      throw createIntegrationException(HttpStatus.BAD_REQUEST, {
+        code: 'ACCOUNT_NOT_LINKED',
+        provider: IntegrationProvider.JIRA,
+        message: 'Jira account is not linked for this user.',
+        reconnectRequired: true,
+      });
+    }
+
+    return token;
+  }
+
+  private async mapJiraError(
+    error: any,
+    userId: string,
+    fallbackMessage: string,
+  ): Promise<never> {
+    const status = error?.response?.status;
+
+    if (status === 401) {
+      await this.integrationTokenRepository.delete({
+        user_id: userId,
+        provider: IntegrationProvider.JIRA,
+      });
+      throw createIntegrationException(HttpStatus.UNAUTHORIZED, {
+        code: 'TOKEN_EXPIRED',
+        provider: IntegrationProvider.JIRA,
+        message:
+          'Jira token expired or is no longer valid. Please reconnect Jira.',
+        reconnectRequired: true,
+      });
+    }
+
+    if (status === 403) {
+      throw createIntegrationException(HttpStatus.FORBIDDEN, {
+        code: 'INSUFFICIENT_SCOPE',
+        provider: IntegrationProvider.JIRA,
+        message:
+          'Jira access is missing required permissions for this action. Please reconnect Jira with the required scopes.',
+        reconnectRequired: true,
+      });
+    }
+
+    if (status === 404) {
+      throw createIntegrationException(HttpStatus.NOT_FOUND, {
+        code: 'NOT_FOUND',
+        provider: IntegrationProvider.JIRA,
+        message: 'The requested Jira resource could not be found.',
+      });
+    }
+
+    if (status === 429) {
+      throw createIntegrationException(HttpStatus.TOO_MANY_REQUESTS, {
+        code: 'RATE_LIMITED',
+        provider: IntegrationProvider.JIRA,
+        message:
+          'Jira rate limit reached. Please retry after the provider quota resets.',
+        retryable: true,
+      });
+    }
+
+    throw createIntegrationException(HttpStatus.BAD_REQUEST, {
+      code: 'VALIDATION_ERROR',
+      provider: IntegrationProvider.JIRA,
+      message: fallbackMessage,
+      details: {
+        providerMessage:
+          error?.response?.data?.errorMessages?.[0] ||
+          error?.response?.data?.message ||
+          error?.message ||
+          fallbackMessage,
+      },
+    });
+  }
 
   async getJiraCloudId(accessToken: string): Promise<string> {
     try {
@@ -69,20 +150,19 @@ export class JiraService {
       return jiraResource ? jiraResource.id : resources[0].id;
     } catch (error: any) {
       console.error('Failed to get Jira Cloud ID:', error.message);
-      throw new BadRequestException(
-        'Could not connect to Atlassian to resolve Site ID',
-      );
+      throw createIntegrationException(HttpStatus.BAD_REQUEST, {
+        code: 'VALIDATION_ERROR',
+        provider: IntegrationProvider.JIRA,
+        message: 'Could not connect to Atlassian to resolve Jira site ID.',
+        details: {
+          providerMessage: error?.response?.data?.message || error?.message,
+        },
+      });
     }
   }
 
   async getProjects(userId: string): Promise<JiraProject[]> {
-    const token = await this.integrationTokenRepository.findOne({
-      where: { user_id: userId, provider: IntegrationProvider.JIRA },
-    });
-
-    if (!token || !token.access_token) {
-      throw new BadRequestException('Jira account is not linked for this user');
-    }
+    const token = await this.getRequiredToken(userId);
 
     try {
       // 1. Get the Cloud ID for the user's Atlassian site
@@ -107,27 +187,12 @@ export class JiraService {
       return response.data.values || [];
     } catch (error: any) {
       console.error('Jira API error fetching projects:', error.message);
-      if (error.response?.status === 401 || error.response?.status === 403) {
-        await this.integrationTokenRepository.delete({
-          user_id: userId,
-          provider: IntegrationProvider.JIRA,
-        });
-        throw new BadRequestException(
-          'Jira token expired or invalid. Please re-link your Atlassian account.',
-        );
-      }
-      throw new BadRequestException('Failed to fetch Jira projects');
+      return this.mapJiraError(error, userId, 'Failed to fetch Jira projects.');
     }
   }
 
   async getProjectIssues(userId: string, projectId: string): Promise<any[]> {
-    const token = await this.integrationTokenRepository.findOne({
-      where: { user_id: userId, provider: IntegrationProvider.JIRA },
-    });
-
-    if (!token || !token.access_token) {
-      throw new BadRequestException('Jira account is not linked for this user');
-    }
+    const token = await this.getRequiredToken(userId);
 
     try {
       const cloudId = await this.getJiraCloudId(token.access_token);
@@ -159,7 +224,11 @@ export class JiraService {
       }));
     } catch (error: any) {
       console.error('Jira API error fetching project issues:', error.message);
-      throw new BadRequestException('Failed to fetch Jira project issues');
+      return this.mapJiraError(
+        error,
+        userId,
+        `Failed to fetch Jira issues for project ${projectId}.`,
+      );
     }
   }
 
@@ -194,13 +263,7 @@ export class JiraService {
   }
 
   async createProject(userId: string, projectName: string, projectKey: string) {
-    const token = await this.integrationTokenRepository.findOne({
-      where: { user_id: userId, provider: IntegrationProvider.JIRA },
-    });
-
-    if (!token || !token.access_token) {
-      throw new BadRequestException('Jira account is not linked for this user');
-    }
+    const token = await this.getRequiredToken(userId);
 
     try {
       const cloudId = await this.getJiraCloudId(token.access_token);
@@ -247,9 +310,37 @@ export class JiraService {
         'Jira API error creating project:',
         error?.response?.data || error.message,
       );
-      throw new BadRequestException(
-        'Failed to create Jira project: ' +
-          (error?.response?.data?.errorMessages?.[0] || error.message),
+      return this.mapJiraError(error, userId, 'Failed to create Jira project.');
+    }
+  }
+
+  async validateProjectAccess(userId: string, projectKey: string) {
+    const token = await this.getRequiredToken(userId);
+
+    try {
+      const cloudId = await this.getJiraCloudId(token.access_token);
+      const response = await lastValueFrom(
+        this.httpService.get<JiraProject>(
+          `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/project/${encodeURIComponent(projectKey)}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token.access_token}`,
+              Accept: 'application/json',
+            },
+          },
+        ),
+      );
+
+      return response.data;
+    } catch (error: any) {
+      console.error(
+        `Jira API error validating project key ${projectKey}:`,
+        error?.response?.data || error.message,
+      );
+      return this.mapJiraError(
+        error,
+        userId,
+        `Failed to validate Jira project key ${projectKey}.`,
       );
     }
   }
