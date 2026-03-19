@@ -58,6 +58,69 @@ export class AuthController {
     @InjectRepository(User) private readonly userRepository: Repository<User>,
   ) {}
 
+  private getAllowedRedirectOrigins(): string[] {
+    return (
+      this.configService
+        .get<string>('ALLOWED_CORS_ORIGINS')
+        ?.split(',')
+        .map((origin) => origin.trim())
+        .filter((origin) => origin.length > 0) || ['http://localhost:3000']
+    );
+  }
+
+  private isValidRedirectUri(
+    redirectUri: string | undefined,
+    allowedOrigins: string[],
+  ): boolean {
+    if (!redirectUri) {
+      return false;
+    }
+
+    const normalizedRedirectUri = redirectUri.trim();
+
+    if (
+      allowedOrigins.some((origin) => normalizedRedirectUri.startsWith(origin))
+    ) {
+      return true;
+    }
+
+    const customSchemeMatch = normalizedRedirectUri.match(
+      /^([a-z][a-z0-9+\-.]*):\/\//i,
+    );
+
+    if (!customSchemeMatch) {
+      return false;
+    }
+
+    const redirectScheme = customSchemeMatch[1].toLowerCase();
+    const allowedCustomSchemes = allowedOrigins
+      .map((origin) =>
+        origin.match(/^([a-z][a-z0-9+\-.]*):\/\//i)?.[1].toLowerCase(),
+      )
+      .filter(
+        (scheme): scheme is string =>
+          !!scheme && scheme !== 'http' && scheme !== 'https',
+      );
+
+    return allowedCustomSchemes.includes(redirectScheme);
+  }
+
+  private buildTokenRedirectUrl(redirectUri: string, token: string): string {
+    const normalizedRedirectUri = redirectUri.trim();
+    const redirectUrl = new URL(normalizedRedirectUri);
+
+    // Keep backward compatibility for web clients that pass only a base origin.
+    if (
+      (redirectUrl.protocol === 'http:' || redirectUrl.protocol === 'https:') &&
+      (redirectUrl.pathname === '/' || redirectUrl.pathname === '')
+    ) {
+      redirectUrl.pathname = '/auth/callback';
+    }
+
+    redirectUrl.searchParams.set('token', token);
+    return redirectUrl.toString();
+  }
+
   // ============ Email/Password Authentication ============
 
   @Post('register')
@@ -112,12 +175,10 @@ export class AuthController {
     @Res() res: Response,
   ) {
     // Validate redirect_uri against allowed origins from environment
-    const allowedOrigins = this.configService
-      .get<string>('ALLOWED_CORS_ORIGINS')
-      ?.split(',') || ['http://localhost:3000', 'http://localhost:5173'];
-
-    const isValidRedirectUri = allowedOrigins.some((origin) =>
-      redirectUri?.startsWith(origin),
+    const allowedOrigins = this.getAllowedRedirectOrigins();
+    const isValidRedirectUri = this.isValidRedirectUri(
+      redirectUri,
+      allowedOrigins,
     );
 
     if (!redirectUri || !isValidRedirectUri) {
@@ -148,7 +209,7 @@ export class AuthController {
   async githubCallback(
     @Query('code') code: string,
     @Query('state') state: string,
-    @Req() req: any,
+    @Req() req: Request & { user?: RequestUser },
     @Res() res: Response,
   ) {
     // Validate required parameters
@@ -183,8 +244,8 @@ export class AuthController {
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
-    // Redirect to the original redirect_uri from Redis
-    res.redirect(`${redirectUri}/auth/callback`);
+    // Redirect with token for mobile deep links and web callback handling.
+    res.redirect(this.buildTokenRedirectUrl(redirectUri, token));
   }
 
   // ============ Jira OAuth ============
@@ -201,12 +262,10 @@ export class AuthController {
     @Query('redirect_uri') redirectUri: string,
     @Res() res: Response,
   ) {
-    const allowedOrigins = this.configService
-      .get<string>('ALLOWED_CORS_ORIGINS')
-      ?.split(',') || ['http://localhost:3000', 'http://localhost:5173'];
-
-    const isValidRedirectUri = allowedOrigins.some((origin) =>
-      redirectUri?.startsWith(origin),
+    const allowedOrigins = this.getAllowedRedirectOrigins();
+    const isValidRedirectUri = this.isValidRedirectUri(
+      redirectUri,
+      allowedOrigins,
     );
 
     if (!redirectUri || !isValidRedirectUri) {
@@ -236,7 +295,7 @@ export class AuthController {
   async jiraCallback(
     @Query('code') code: string,
     @Query('state') state: string,
-    @Req() req: any,
+    @Req() req: Request & { user?: RequestUser },
     @Res() res: Response,
   ) {
     if (!code || code.length === 0 || !state || state.length === 0) {
@@ -263,7 +322,7 @@ export class AuthController {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    res.redirect(`${redirectUri}/auth/callback`);
+    res.redirect(this.buildTokenRedirectUrl(redirectUri, token));
   }
 
   // ============ Account Management ============
