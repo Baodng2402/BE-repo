@@ -19,6 +19,7 @@ export * from './integration-token.entity';
 export * from './notification.entity';
 export * from './project-link.entity';
 export * from './semester.entity';
+export * from './semester-week-audit-log.entity';
 export * from './task.entity';
 export * from './topic.entity';
 export * from './user.entity';

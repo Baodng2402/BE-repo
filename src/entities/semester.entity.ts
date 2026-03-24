@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 import { SemesterStatus } from '../common/enums/semester-status.enum';
 import { ImportBatch } from './import-batch.entity';
+import { SemesterWeekAuditLog } from './semester-week-audit-log.entity';
 
 @Entity('Semester')
 export class Semester {
@@ -33,6 +34,9 @@ export class Semester {
   })
   status: SemesterStatus;
 
+  @Column({ type: 'int', default: 1 })
+  current_week: number;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at: Date;
 
@@ -41,5 +45,7 @@ export class Semester {
 
   @OneToMany(() => ImportBatch, (batch) => batch.semester)
   import_batches: ImportBatch[];
-}
 
+  @OneToMany(() => SemesterWeekAuditLog, (audit) => audit.semester)
+  week_change_audits: SemesterWeekAuditLog[];
+}
