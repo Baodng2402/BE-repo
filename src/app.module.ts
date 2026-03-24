@@ -8,6 +8,7 @@ import { HealthController } from './health/health.controller';
 import { AuthModule } from './modules/auth/auth.module';
 import { ClassModule } from './modules/class/class.module';
 import { DocumentSubmissionModule } from './modules/document-submission/document-submission.module';
+import { EvaluationModule } from './modules/evaluation/evaluation.module';
 import { GithubModule } from './modules/github/github.module';
 import { GroupsModule } from './modules/groups/groups.module';
 import { JiraModule } from './modules/jira/jira.module';
@@ -54,6 +55,7 @@ import { UsersModule } from './modules/users/users.module';
     ClassModule,
     NotificationModule,
     DocumentSubmissionModule,
+    EvaluationModule,
     TopicModule,
     ReportModule,
     MailModule,

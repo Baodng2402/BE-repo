@@ -40,6 +40,20 @@ export const ERROR_MESSAGES = {
     NOT_FOUND: 'Class not found',
     ACCESS_DENIED: 'You do not have permission to view this class',
   },
+  EVALUATIONS: {
+    NOT_FOUND: 'Evaluation not found',
+    GROUP_NOT_FOUND: 'Group not found',
+    NOT_GROUP_MEMBER: 'You are not a member of this group',
+    FORBIDDEN:
+      'You do not have permission to manage evaluations for this group',
+    SUM_NOT_100: 'Contribution percentages must sum to 100% (tolerance ±0.05)',
+    MISSING_MEMBERS:
+      'All active group members must be included in the evaluation',
+    INVALID_MEMBER:
+      'One or more user IDs do not belong to active members of this group',
+    CONTRIBUTION_NOT_FOUND:
+      'Your contribution was not found in this evaluation',
+  },
   VALIDATION: {
     INVALID_EMAIL: 'Invalid email format',
     PASSWORD_TOO_SHORT: 'Password must be at least 6 characters',

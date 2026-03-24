@@ -8,6 +8,8 @@ export {
 export * from './class-membership.entity';
 export * from './class.entity';
 export * from './document-submission.entity';
+export * from './evaluation-contribution.entity';
+export * from './evaluation.entity';
 export * from './group-membership.entity';
 export * from './group-repository.entity';
 export * from './group.entity';

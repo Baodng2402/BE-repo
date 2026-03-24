@@ -11,6 +11,7 @@ import {
 import { GroupStatus } from '../common/enums';
 import { Class } from './class.entity';
 import { DocumentSubmission } from './document-submission.entity';
+import { Evaluation } from './evaluation.entity';
 import { GroupMembership } from './group-membership.entity';
 import { Topic } from './topic.entity';
 import { User } from './user.entity';
@@ -73,4 +74,7 @@ export class Group {
 
   @OneToMany(() => DocumentSubmission, (sub) => sub.group)
   submissions: DocumentSubmission[];
+
+  @OneToMany(() => Evaluation, (evaluation) => evaluation.group)
+  evaluations: Evaluation[];
 }
