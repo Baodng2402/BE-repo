@@ -33,7 +33,7 @@ export class GroupMembership {
 
   @ManyToOne(() => Group, (group) => group.members)
   @JoinColumn({ name: 'group_id' })
-  group: Group;
+  group: Group | null;
 
   @ManyToOne(() => User, (user) => user.memberships)
   @JoinColumn({ name: 'user_id' })

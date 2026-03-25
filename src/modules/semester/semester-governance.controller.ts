@@ -87,7 +87,10 @@ export class SemesterGovernanceController {
       'Get week-based warning payload for the current student/group leader',
   })
   async getStudentWarnings(@Req() req: AuthorizedRequest) {
-    return this.semesterService.getStudentWeeklyWarnings(req.user.id);
+    return this.semesterService.getStudentWeeklyWarnings(
+      req.user.id,
+      req.user.role as Role,
+    );
   }
 
   @Get('current/reviews/lecturer-summary')

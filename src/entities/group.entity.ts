@@ -67,7 +67,7 @@ export class Group {
 
   @ManyToOne(() => Class, (cls) => cls.groups)
   @JoinColumn({ name: 'class_id' })
-  class: Class;
+  class: Class | null;
 
   @ManyToOne(() => Topic, (topic) => topic.groups, { nullable: true })
   @JoinColumn({ name: 'topic_id' })

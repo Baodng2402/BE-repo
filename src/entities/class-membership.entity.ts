@@ -21,7 +21,7 @@ export class ClassMembership {
 
   @ManyToOne(() => Class, (cls) => cls.memberships)
   @JoinColumn({ name: 'class_id' })
-  class: Class;
+  class: Class | null;
 
   @ManyToOne(() => User, (user) => user.class_memberships)
   @JoinColumn({ name: 'user_id' })

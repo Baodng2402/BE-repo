@@ -70,6 +70,23 @@ describe('SemesterGovernanceController', () => {
     );
   });
 
+  it('delegates student warning lookup with caller role', async () => {
+    semesterService.getStudentWeeklyWarnings.mockResolvedValue({
+      semester: null,
+      warnings: [],
+      classes: [],
+    });
+
+    await controller.getStudentWarnings({
+      user: { id: 'student-1', role: Role.STUDENT },
+    } as any);
+
+    expect(semesterService.getStudentWeeklyWarnings).toHaveBeenCalledWith(
+      'student-1',
+      Role.STUDENT,
+    );
+  });
+
   it('delegates current group review upsert with caller identity', async () => {
     semesterService.upsertCurrentGroupReview.mockResolvedValue({
       group: { group_id: 'group-1' },

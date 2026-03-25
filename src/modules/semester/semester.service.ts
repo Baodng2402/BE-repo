@@ -412,121 +412,173 @@ export class SemesterService {
     };
   }
 
-  async getStudentWeeklyWarnings(userId: string) {
-    const semester = await this.getCurrentSemester();
+  async getStudentWeeklyWarnings(userId: string, userRole: Role = Role.STUDENT) {
+    try {
+      const semester = await this.getCurrentSemester();
 
-    if (!semester) {
+      if (!semester) {
+        return {
+          semester: null,
+          warnings: [],
+          classes: [],
+        };
+      }
+
+      const classMemberships = await this.classMembershipRepository.find({
+        where: { user_id: userId },
+        relations: ['class'],
+      });
+
+      const currentClasses = classMemberships
+        .map((membership) => membership.class)
+        .filter((targetClass): targetClass is Class => {
+          return !!targetClass && targetClass.semester === semester.code;
+        });
+
+      const classIds = currentClasses.map((targetClass) => targetClass.id);
+      const groupMemberships =
+        classIds.length > 0
+          ? await this.groupMembershipRepository.find({
+              where: {
+                user_id: userId,
+                left_at: IsNull(),
+              },
+              relations: ['group', 'group.topic', 'group.class'],
+            })
+          : [];
+
+      const currentGroupMemberships = groupMemberships.filter((membership) => {
+        const group = membership.group;
+        return (
+          !!group &&
+          !!group.class &&
+          group.class.semester === semester.code &&
+          classIds.includes(group.class_id)
+        );
+      });
+
+      const orphanClassMembershipCount =
+        classMemberships.length - currentClasses.length;
+      const orphanGroupMembershipCount =
+        groupMemberships.length - currentGroupMemberships.length;
+
+      const groupMembershipsByClassId = new Map<string, GroupMembership[]>();
+      for (const membership of currentGroupMemberships) {
+        const classKey = membership.group?.class_id;
+        if (!classKey) {
+          continue;
+        }
+        const current = groupMembershipsByClassId.get(classKey) || [];
+        current.push(membership);
+        groupMembershipsByClassId.set(classKey, current);
+      }
+
+      const warnings: Array<{
+        code: string;
+        severity: 'warning';
+        class_id: string;
+        class_code: string;
+        class_name: string;
+        group_id?: string;
+        group_name?: string;
+        message: string;
+      }> = [];
+
+      const classSummaries = currentClasses.map((targetClass) => {
+        const membershipsInClass =
+          groupMembershipsByClassId.get(targetClass.id) || [];
+        const groups = membershipsInClass
+          .map((membership) => membership.group)
+          .filter((group): group is Group => !!group);
+
+        if (semester.current_week >= 1 && groups.length === 0) {
+          warnings.push({
+            code: 'WEEK1_NO_GROUP',
+            severity: 'warning',
+            class_id: targetClass.id,
+            class_code: targetClass.code,
+            class_name: targetClass.name,
+            message:
+              'Week 1 checkpoint is active and you have not joined a group for this class.',
+          });
+        }
+
+        if (semester.current_week >= 2) {
+          for (const group of groups) {
+            if (!this.isTopicFinalized(group)) {
+              warnings.push({
+                code: 'WEEK2_TOPIC_NOT_FINALIZED',
+                severity: 'warning',
+                class_id: targetClass.id,
+                class_code: targetClass.code,
+                class_name: targetClass.name,
+                group_id: group.id,
+                group_name: group.name,
+                message:
+                  'Week 2 checkpoint is active and your group has not finalized a topic yet.',
+              });
+            }
+          }
+        }
+
+        return {
+          class_id: targetClass.id,
+          class_code: targetClass.code,
+          class_name: targetClass.name,
+          has_group: groups.length > 0,
+          week1_status: (groups.length > 0 ? 'PASS' : 'FAIL') as WeekGateStatus,
+          groups: groups.map((group) => ({
+            group_id: group.id,
+            group_name: group.name,
+            topic_name: group.topic?.name || group.project_name || null,
+            has_finalized_topic: this.isTopicFinalized(group),
+            week2_status: (
+              this.isTopicFinalized(group) ? 'PASS' : 'FAIL'
+            ) as WeekGateStatus,
+          })),
+        };
+      });
+
+      this.logger.log(
+        JSON.stringify({
+          event: 'student_warning_summary',
+          user_id: userId,
+          role: userRole,
+          semester_code: semester.code,
+          class_membership_count: classMemberships.length,
+          current_class_count: currentClasses.length,
+          group_membership_count: groupMemberships.length,
+          current_group_membership_count: currentGroupMemberships.length,
+          orphan_class_membership_count: orphanClassMembershipCount,
+          orphan_group_membership_count: orphanGroupMembershipCount,
+          warning_count: warnings.length,
+        }),
+      );
+
+      return {
+        semester: this.serializeSemester(semester),
+        warnings,
+        classes: classSummaries,
+      };
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'student_warning_degraded',
+          user_id: userId,
+          role: userRole,
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Unexpected student warning failure.',
+        }),
+      );
+
       return {
         semester: null,
         warnings: [],
         classes: [],
       };
     }
-
-    const classMemberships = await this.classMembershipRepository.find({
-      where: { user_id: userId },
-      relations: ['class'],
-    });
-
-    const currentClasses = classMemberships
-      .map((membership) => membership.class)
-      .filter((targetClass): targetClass is Class => {
-        return !!targetClass && targetClass.semester === semester.code;
-      });
-
-    const classIds = currentClasses.map((targetClass) => targetClass.id);
-    const groupMemberships =
-      classIds.length > 0
-        ? await this.groupMembershipRepository.find({
-            where: {
-              user_id: userId,
-              left_at: IsNull(),
-            },
-            relations: ['group', 'group.topic', 'group.class'],
-          })
-        : [];
-
-    const currentGroupMemberships = groupMemberships.filter(
-      (membership) => membership.group?.class?.semester === semester.code,
-    );
-
-    const groupMembershipsByClassId = new Map<string, GroupMembership[]>();
-    for (const membership of currentGroupMemberships) {
-      const classKey = membership.group.class_id;
-      const current = groupMembershipsByClassId.get(classKey) || [];
-      current.push(membership);
-      groupMembershipsByClassId.set(classKey, current);
-    }
-
-    const warnings: Array<{
-      code: string;
-      severity: 'warning';
-      class_id: string;
-      class_code: string;
-      class_name: string;
-      group_id?: string;
-      group_name?: string;
-      message: string;
-    }> = [];
-
-    const classSummaries = currentClasses.map((targetClass) => {
-      const membershipsInClass =
-        groupMembershipsByClassId.get(targetClass.id) || [];
-      const groups = membershipsInClass.map((membership) => membership.group);
-
-      if (semester.current_week >= 1 && groups.length === 0) {
-        warnings.push({
-          code: 'WEEK1_NO_GROUP',
-          severity: 'warning',
-          class_id: targetClass.id,
-          class_code: targetClass.code,
-          class_name: targetClass.name,
-          message:
-            'Week 1 checkpoint is active and you have not joined a group for this class.',
-        });
-      }
-
-      if (semester.current_week >= 2) {
-        for (const group of groups) {
-          if (!this.isTopicFinalized(group)) {
-            warnings.push({
-              code: 'WEEK2_TOPIC_NOT_FINALIZED',
-              severity: 'warning',
-              class_id: targetClass.id,
-              class_code: targetClass.code,
-              class_name: targetClass.name,
-              group_id: group.id,
-              group_name: group.name,
-              message:
-                'Week 2 checkpoint is active and your group has not finalized a topic yet.',
-            });
-          }
-        }
-      }
-
-      return {
-        class_id: targetClass.id,
-        class_code: targetClass.code,
-        class_name: targetClass.name,
-        has_group: groups.length > 0,
-        week1_status: (groups.length > 0 ? 'PASS' : 'FAIL') as WeekGateStatus,
-        groups: groups.map((group) => ({
-          group_id: group.id,
-          group_name: group.name,
-          topic_name: group.topic?.name || group.project_name || null,
-          has_finalized_topic: this.isTopicFinalized(group),
-          week2_status: (
-            this.isTopicFinalized(group) ? 'PASS' : 'FAIL'
-          ) as WeekGateStatus,
-        })),
-      };
-    });
-
-    return {
-      semester: this.serializeSemester(semester),
-      warnings,
-      classes: classSummaries,
-    };
   }
 
   async getLecturerReviewSummary(

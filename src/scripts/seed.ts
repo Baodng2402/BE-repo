@@ -24,6 +24,27 @@ async function bootstrap() {
   const groupRepository = dataSource.getRepository(Group);
   const topicRepository = dataSource.getRepository(Topic);
 
+  console.log('Seeding default Admin...');
+  let admin = await userRepository.findOne({
+    where: { email: 'admin@edu.vn' },
+  });
+  if (!admin) {
+    const salt = await bcrypt.genSalt();
+    const passwordHash = await bcrypt.hash('password123', salt);
+    admin = userRepository.create({
+      email: 'admin@edu.vn',
+      full_name: 'System Admin',
+      password_hash: passwordHash,
+      role: Role.ADMIN,
+      primary_provider: AuthProvider.EMAIL,
+      is_email_verified: true,
+    });
+    await userRepository.save(admin);
+    console.log('Created default Admin account');
+  } else {
+    console.log('Default Admin already exists');
+  }
+
   console.log('Seeding Mr.Teo (Lecturer)...');
   let lecturer = await userRepository.findOne({
     where: { email: 'mr.teo@edu.vn' },

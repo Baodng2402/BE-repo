@@ -384,6 +384,112 @@ describe('SemesterService', () => {
     );
   });
 
+  it('returns an empty valid payload when student has no class in the current semester', async () => {
+    semesterRepo.findOne.mockResolvedValueOnce({
+      id: 'semester-1',
+      code: 'SP26',
+      name: 'Spring 2026',
+      status: SemesterStatus.ACTIVE,
+      current_week: 2,
+      start_date: '2026-01-01',
+      end_date: '2026-05-01',
+    });
+    classMembershipRepo.find.mockResolvedValue([
+      {
+        class: {
+          id: 'class-old',
+          code: 'OLD101',
+          name: 'Old Class',
+          semester: 'SP25',
+        },
+      },
+    ]);
+
+    const result = await service.getStudentWeeklyWarnings('student-1');
+
+    expect(result.semester?.code).toBe('SP26');
+    expect(result.warnings).toEqual([]);
+    expect(result.classes).toEqual([]);
+  });
+
+  it('degrades safely when warning relations are null or orphaned', async () => {
+    semesterRepo.findOne.mockResolvedValueOnce({
+      id: 'semester-1',
+      code: 'SP26',
+      name: 'Spring 2026',
+      status: SemesterStatus.ACTIVE,
+      current_week: 2,
+      start_date: '2026-01-01',
+      end_date: '2026-05-01',
+    });
+    classMembershipRepo.find.mockResolvedValue([
+      { class: null },
+      {
+        class: {
+          id: 'class-1',
+          code: 'SWP391',
+          name: 'Software Project',
+          semester: 'SP26',
+        },
+      },
+    ]);
+    groupMembershipRepo.find.mockResolvedValue([
+      { group: null },
+      {
+        group: {
+          id: 'group-1',
+          class_id: 'class-1',
+          name: 'Group 1',
+          topic: null,
+          project_name: null,
+          class: null,
+        },
+      },
+    ]);
+
+    const result = await service.getStudentWeeklyWarnings(
+      'student-1',
+      Role.STUDENT,
+    );
+
+    expect(result.semester?.code).toBe('SP26');
+    expect(result.classes).toHaveLength(1);
+    expect(result.classes[0]).toMatchObject({
+      class_id: 'class-1',
+      has_group: false,
+      week1_status: 'FAIL',
+    });
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'WEEK1_NO_GROUP' }),
+      ]),
+    );
+  });
+
+  it('degrades to an empty payload when the warning path throws unexpectedly', async () => {
+    semesterRepo.findOne.mockResolvedValueOnce({
+      id: 'semester-1',
+      code: 'SP26',
+      name: 'Spring 2026',
+      status: SemesterStatus.ACTIVE,
+      current_week: 2,
+      start_date: '2026-01-01',
+      end_date: '2026-05-01',
+    });
+    classMembershipRepo.find.mockRejectedValue(new Error('broken relation'));
+
+    const result = await service.getStudentWeeklyWarnings(
+      'student-1',
+      Role.STUDENT,
+    );
+
+    expect(result).toEqual({
+      semester: null,
+      warnings: [],
+      classes: [],
+    });
+  });
+
   it('maps current week to grouped review milestone windows', async () => {
     semesterRepo.findOne.mockResolvedValueOnce({
       id: 'semester-1',
