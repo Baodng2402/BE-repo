@@ -10,10 +10,12 @@ import { AuthProvider, Role } from '../common/enums';
 import { ClassMembership } from './class-membership.entity';
 import { Class } from './class.entity';
 import { DocumentSubmission } from './document-submission.entity';
+import { ExaminerAssignment } from './examiner-assignment.entity';
 import { GroupMembership } from './group-membership.entity';
 import { Group } from './group.entity';
 import { IntegrationToken } from './integration-token.entity';
 import { Notification } from './notification.entity';
+import { TeachingAssignment } from './teaching-assignment.entity';
 
 @Entity('User')
 export class User {
@@ -73,4 +75,16 @@ export class User {
 
   @OneToMany(() => DocumentSubmission, (submission) => submission.submittedBy)
   submissions: DocumentSubmission[];
+
+  @OneToMany(
+    () => TeachingAssignment,
+    (assignment) => assignment.lecturer,
+  )
+  teaching_assignments: TeachingAssignment[];
+
+  @OneToMany(
+    () => ExaminerAssignment,
+    (assignment) => assignment.lecturer,
+  )
+  examiner_assignments: ExaminerAssignment[];
 }

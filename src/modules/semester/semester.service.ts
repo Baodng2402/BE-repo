@@ -21,6 +21,7 @@ import {
 import {
   Class,
   ClassMembership,
+  ExaminerAssignment,
   Group,
   GroupMembership,
   GroupRepository,
@@ -30,17 +31,35 @@ import {
   Semester,
   SemesterWeekAuditLog,
   Task,
+  TeachingAssignment,
   User,
 } from '../../entities';
 import { GithubService } from '../github/github.service';
+import { BulkExaminerAssignmentDto } from './dto/bulk-examiner-assignment.dto';
+import { BulkTeachingAssignmentDto } from './dto/bulk-teaching-assignment.dto';
 import { CreateSemesterDto } from './dto/create-semester.dto';
+import { CreateSemesterLecturerDto } from './dto/create-semester-lecturer.dto';
+import { CreateSemesterStudentDto } from './dto/create-semester-student.dto';
 import { UpdateSemesterDto } from './dto/update-semester.dto';
+import { UpdateSemesterLecturerDto } from './dto/update-semester-lecturer.dto';
+import { UpdateSemesterStudentDto } from './dto/update-semester-student.dto';
 import { UpsertGroupReviewDto } from './dto/upsert-group-review.dto';
 import { SemesterImportRow } from './utils/semester-import.util';
 
 type ImportMode = 'VALIDATE' | 'IMPORT';
 type WeekGateStatus = 'PASS' | 'FAIL';
 type ReviewMilestoneStatus = 'PENDING' | 'REVIEWED';
+type RosterErrorCode =
+  | 'CLASS_NOT_IN_SEMESTER'
+  | 'SEMESTER_NOT_EDITABLE'
+  | 'LECTURER_ALREADY_EXISTS'
+  | 'LECTURER_NOT_FOUND'
+  | 'LECTURER_STILL_ASSIGNED'
+  | 'STUDENT_ALREADY_IN_SEMESTER'
+  | 'STUDENT_NOT_FOUND'
+  | 'USER_ROLE_CONFLICT'
+  | 'WEEK_GATE_NOT_REACHED'
+  | 'EXAMINER_OWN_CLASS_CONFLICT';
 
 export interface ReviewMilestoneContext {
   code: ReviewMilestoneCode;
@@ -75,6 +94,10 @@ export class SemesterService {
     private readonly classRepository: Repository<Class>,
     @InjectRepository(ClassMembership)
     private readonly classMembershipRepository: Repository<ClassMembership>,
+    @InjectRepository(TeachingAssignment)
+    private readonly teachingAssignmentRepository: Repository<TeachingAssignment>,
+    @InjectRepository(ExaminerAssignment)
+    private readonly examinerAssignmentRepository: Repository<ExaminerAssignment>,
     @InjectRepository(Group)
     private readonly groupRepository: Repository<Group>,
     @InjectRepository(GroupMembership)
@@ -351,9 +374,9 @@ export class SemesterService {
           max_members: targetClass.max_students_per_group,
           topic_name: group.topic?.name || group.project_name || null,
           has_finalized_topic: hasTopic,
-          week1_status: (
-            activeMembers.length > 0 ? 'PASS' : 'FAIL'
-          ) as WeekGateStatus,
+          week1_status: (activeMembers.length > 0
+            ? 'PASS'
+            : 'FAIL') as WeekGateStatus,
           week2_status: (hasTopic ? 'PASS' : 'FAIL') as WeekGateStatus,
         };
       });
@@ -375,12 +398,12 @@ export class SemesterService {
         total_groups: targetGroups.length,
         students_without_group_count: studentsWithoutGroupCount,
         groups_without_topic_count: groupsWithoutTopicCount,
-        week1_status: (
-          studentsWithoutGroupCount === 0 ? 'PASS' : 'FAIL'
-        ) as WeekGateStatus,
-        week2_status: (
-          groupsWithoutTopicCount === 0 ? 'PASS' : 'FAIL'
-        ) as WeekGateStatus,
+        week1_status: (studentsWithoutGroupCount === 0
+          ? 'PASS'
+          : 'FAIL') as WeekGateStatus,
+        week2_status: (groupsWithoutTopicCount === 0
+          ? 'PASS'
+          : 'FAIL') as WeekGateStatus,
         groups: groupSummaries,
       };
     });
@@ -412,7 +435,10 @@ export class SemesterService {
     };
   }
 
-  async getStudentWeeklyWarnings(userId: string, userRole: Role = Role.STUDENT) {
+  async getStudentWeeklyWarnings(
+    userId: string,
+    userRole: Role = Role.STUDENT,
+  ) {
     try {
       const semester = await this.getCurrentSemester();
 
@@ -532,9 +558,9 @@ export class SemesterService {
             group_name: group.name,
             topic_name: group.topic?.name || group.project_name || null,
             has_finalized_topic: this.isTopicFinalized(group),
-            week2_status: (
-              this.isTopicFinalized(group) ? 'PASS' : 'FAIL'
-            ) as WeekGateStatus,
+            week2_status: (this.isTopicFinalized(group)
+              ? 'PASS'
+              : 'FAIL') as WeekGateStatus,
           })),
         };
       });
@@ -750,8 +776,7 @@ export class SemesterService {
         dto.review_milestone_score ??
         existingReview?.review_milestone_score ??
         null,
-      lecturer_note:
-        dto.lecturer_note ?? existingReview?.lecturer_note ?? null,
+      lecturer_note: dto.lecturer_note ?? existingReview?.lecturer_note ?? null,
       snapshot_task_total: snapshot.task_total,
       snapshot_task_done: snapshot.task_done,
       snapshot_commit_total: snapshot.commit_total,
@@ -843,6 +868,574 @@ export class SemesterService {
     });
 
     return this.semesterRepository.save(semester);
+  }
+
+  async getSemesterRoster(semesterId: string) {
+    const semester = await this.getSemesterOrThrow(semesterId);
+    const classes = await this.classRepository.find({
+      where: { semester: semester.code },
+      relations: ['lecturer'],
+      order: { code: 'ASC' },
+    });
+    const classIds = classes.map((item) => item.id);
+
+    const [teachingAssignments, examinerAssignments, studentMemberships, lecturers] =
+      await Promise.all([
+        this.teachingAssignmentRepository.find({
+          where: { semester_id: semester.id },
+          relations: ['class', 'lecturer'],
+        }),
+        this.examinerAssignmentRepository.find({
+          where: { semester_id: semester.id },
+          relations: ['class', 'lecturer'],
+        }),
+        classIds.length === 0
+          ? Promise.resolve([])
+          : this.classMembershipRepository.find({
+              where: { class_id: In(classIds) },
+              relations: ['class', 'user'],
+            }),
+        this.userRepository.find({
+          where: { role: Role.LECTURER },
+          order: { full_name: 'ASC', email: 'ASC' },
+        }),
+      ]);
+
+    const teachingByClassId = new Map(
+      teachingAssignments.map((assignment) => [assignment.class_id, assignment]),
+    );
+    const examinerByClassId = new Map<string, ExaminerAssignment[]>();
+    for (const assignment of examinerAssignments) {
+      const bucket = examinerByClassId.get(assignment.class_id) || [];
+      bucket.push(assignment);
+      examinerByClassId.set(assignment.class_id, bucket);
+    }
+
+    const studentMembershipsByClassId = new Map<string, ClassMembership[]>();
+    for (const membership of studentMemberships) {
+      const bucket = studentMembershipsByClassId.get(membership.class_id) || [];
+      bucket.push(membership);
+      studentMembershipsByClassId.set(membership.class_id, bucket);
+    }
+
+    const classRows = classes.map((classItem) => {
+      const teachingAssignment = teachingByClassId.get(classItem.id);
+      const teachingLecturer = teachingAssignment?.lecturer || classItem.lecturer;
+      const classExaminers = examinerByClassId.get(classItem.id) || [];
+      return {
+        id: classItem.id,
+        code: classItem.code,
+        name: classItem.name,
+        lecturer_id: teachingLecturer?.id || classItem.lecturer_id,
+        lecturer_name: teachingLecturer?.full_name || null,
+        student_count: (studentMembershipsByClassId.get(classItem.id) || []).length,
+        examiner_assignments: classExaminers.map((assignment) => ({
+          lecturer_id: assignment.lecturer_id,
+          lecturer_name: assignment.lecturer?.full_name || assignment.lecturer?.email,
+          lecturer_email: assignment.lecturer?.email || null,
+        })),
+      };
+    });
+
+    const teachingByLecturerId = new Map<string, typeof classRows>();
+    for (const classRow of classRows) {
+      if (!classRow.lecturer_id) continue;
+      const bucket = teachingByLecturerId.get(classRow.lecturer_id) || [];
+      bucket.push(classRow);
+      teachingByLecturerId.set(classRow.lecturer_id, bucket);
+    }
+
+    const examinerByLecturerId = new Map<
+      string,
+      Array<{ class_id: string; class_code: string; class_name: string }>
+    >();
+    for (const [classId, assignments] of examinerByClassId.entries()) {
+      const targetClass = classes.find((item) => item.id === classId);
+      if (!targetClass) continue;
+      for (const assignment of assignments) {
+        const bucket = examinerByLecturerId.get(assignment.lecturer_id) || [];
+        bucket.push({
+          class_id: targetClass.id,
+          class_code: targetClass.code,
+          class_name: targetClass.name,
+        });
+        examinerByLecturerId.set(assignment.lecturer_id, bucket);
+      }
+    }
+
+    const studentRows = studentMemberships
+      .filter((membership) => !!membership.user && !!membership.class)
+      .map((membership) => ({
+        id: membership.user_id,
+        email: membership.user.email,
+        full_name: membership.user.full_name,
+        student_id: membership.user.student_id,
+        class_id: membership.class_id,
+        class_code: membership.class?.code || null,
+        class_name: membership.class?.name || null,
+      }))
+      .sort((a, b) => a.email.localeCompare(b.email));
+
+    return {
+      semester: this.serializeSemester(semester),
+      summary: {
+        classes_total: classes.length,
+        lecturers_total: lecturers.length,
+        students_total: studentRows.length,
+        assigned_classes_total: classRows.filter((row) => !!row.lecturer_id).length,
+        unassigned_classes_total: classRows.filter((row) => !row.lecturer_id).length,
+        examiner_assignments_total: examinerAssignments.length,
+        can_assign_examiners: semester.current_week >= 10,
+      },
+      lecturers: lecturers.map((lecturer) => ({
+        id: lecturer.id,
+        email: lecturer.email,
+        full_name: lecturer.full_name,
+        teaching_classes: (teachingByLecturerId.get(lecturer.id) || []).map(
+          (classRow) => ({
+            class_id: classRow.id,
+            class_code: classRow.code,
+            class_name: classRow.name,
+          }),
+        ),
+        examiner_classes: examinerByLecturerId.get(lecturer.id) || [],
+      })),
+      students: studentRows,
+      classes: classRows,
+    };
+  }
+
+  async createSemesterLecturer(
+    semesterId: string,
+    dto: CreateSemesterLecturerDto,
+  ) {
+    const semester = await this.getSemesterOrThrow(semesterId);
+    this.assertSemesterRosterEditable(semester);
+
+    const email = dto.email.trim().toLowerCase();
+    const existing = await this.userRepository.findOne({
+      where: { email },
+    });
+    if (existing) {
+      if (existing.role !== Role.LECTURER) {
+        throw this.buildConflict(
+          'USER_ROLE_CONFLICT',
+          `Email ${email} already belongs to a non-lecturer account.`,
+        );
+      }
+      throw this.buildConflict(
+        'LECTURER_ALREADY_EXISTS',
+        `Lecturer account ${email} already exists.`,
+      );
+    }
+
+    const password = dto.password?.trim() || randomBytes(8).toString('hex');
+    const lecturer = await this.userRepository.save(
+      this.userRepository.create({
+        email,
+        full_name: dto.full_name.trim(),
+        password_hash: await bcrypt.hash(password, 10),
+        role: Role.LECTURER,
+        primary_provider: AuthProvider.EMAIL,
+      }),
+    );
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'semester_roster_lecturer_created',
+        semester_id: semester.id,
+        lecturer_id: lecturer.id,
+        email,
+      }),
+    );
+
+    return lecturer;
+  }
+
+  async updateSemesterLecturer(
+    semesterId: string,
+    lecturerId: string,
+    dto: UpdateSemesterLecturerDto,
+  ) {
+    const semester = await this.getSemesterOrThrow(semesterId);
+    this.assertSemesterRosterEditable(semester);
+
+    const lecturer = await this.userRepository.findOne({
+      where: { id: lecturerId, role: Role.LECTURER },
+    });
+    if (!lecturer) {
+      throw this.buildNotFound('LECTURER_NOT_FOUND', 'Lecturer not found.');
+    }
+
+    if (dto.email?.trim()) {
+      const email = dto.email.trim().toLowerCase();
+      const existing = await this.userRepository.findOne({ where: { email } });
+      if (existing && existing.id !== lecturer.id) {
+        throw this.buildConflict(
+          'LECTURER_ALREADY_EXISTS',
+          `Lecturer account ${email} already exists.`,
+        );
+      }
+      lecturer.email = email;
+    }
+
+    if (dto.full_name?.trim()) {
+      lecturer.full_name = dto.full_name.trim();
+    }
+
+    if (dto.password?.trim()) {
+      lecturer.password_hash = await bcrypt.hash(dto.password.trim(), 10);
+    }
+
+    return this.userRepository.save(lecturer);
+  }
+
+  async deleteSemesterLecturer(semesterId: string, lecturerId: string) {
+    await this.getSemesterOrThrow(semesterId);
+
+    const lecturer = await this.userRepository.findOne({
+      where: { id: lecturerId, role: Role.LECTURER },
+    });
+    if (!lecturer) {
+      throw this.buildNotFound('LECTURER_NOT_FOUND', 'Lecturer not found.');
+    }
+
+    const [teachingCount, examinerCount] = await Promise.all([
+      this.classRepository.count({ where: { lecturer_id: lecturerId } }),
+      this.examinerAssignmentRepository.count({ where: { lecturer_id: lecturerId } }),
+    ]);
+
+    if (teachingCount > 0 || examinerCount > 0) {
+      throw this.buildConflict(
+        'LECTURER_STILL_ASSIGNED',
+        'Lecturer is still assigned to classes or examiner duties.',
+      );
+    }
+
+    await this.userRepository.delete({ id: lecturerId });
+    return { success: true };
+  }
+
+  async createSemesterStudent(
+    semesterId: string,
+    dto: CreateSemesterStudentDto,
+  ) {
+    const semester = await this.getSemesterOrThrow(semesterId);
+    this.assertSemesterRosterEditable(semester);
+
+    const targetClass = await this.getSemesterClassOrThrow(semester.code, dto.class_id);
+    const email = dto.email.trim().toLowerCase();
+    let student = await this.userRepository.findOne({ where: { email } });
+
+    if (student && student.role !== Role.STUDENT) {
+      throw this.buildConflict(
+        'USER_ROLE_CONFLICT',
+        `Email ${email} already belongs to a non-student account.`,
+      );
+    }
+
+    if (!student) {
+      const password = dto.password?.trim() || randomBytes(8).toString('hex');
+      student = await this.userRepository.save(
+        this.userRepository.create({
+          email,
+          student_id: dto.student_id.trim(),
+          full_name: dto.full_name.trim(),
+          password_hash: await bcrypt.hash(password, 10),
+          role: Role.STUDENT,
+          primary_provider: AuthProvider.EMAIL,
+        }),
+      );
+    } else {
+      student.full_name = dto.full_name.trim();
+      student.student_id = dto.student_id.trim();
+      student = await this.userRepository.save(student);
+    }
+
+    const semesterClassIds = await this.getSemesterClassIds(semester.code);
+    const existingMemberships =
+      semesterClassIds.length === 0
+        ? []
+        : await this.classMembershipRepository.find({
+            where: {
+              user_id: student.id,
+              class_id: In(semesterClassIds),
+            },
+          });
+
+    if (existingMemberships.some((membership) => membership.class_id === targetClass.id)) {
+      throw this.buildConflict(
+        'STUDENT_ALREADY_IN_SEMESTER',
+        'Student is already enrolled in the selected class for this semester.',
+      );
+    }
+
+    if (existingMemberships.length > 0) {
+      throw this.buildConflict(
+        'STUDENT_ALREADY_IN_SEMESTER',
+        'Student is already enrolled in another class for this semester.',
+      );
+    }
+
+    await this.classMembershipRepository.save(
+      this.classMembershipRepository.create({
+        class_id: targetClass.id,
+        user_id: student.id,
+      }),
+    );
+
+    return {
+      id: student.id,
+      email: student.email,
+      full_name: student.full_name,
+      student_id: student.student_id,
+      class_id: targetClass.id,
+      class_code: targetClass.code,
+      class_name: targetClass.name,
+    };
+  }
+
+  async updateSemesterStudent(
+    semesterId: string,
+    studentId: string,
+    dto: UpdateSemesterStudentDto,
+  ) {
+    const semester = await this.getSemesterOrThrow(semesterId);
+    this.assertSemesterRosterEditable(semester);
+
+    const student = await this.userRepository.findOne({
+      where: { id: studentId, role: Role.STUDENT },
+    });
+    if (!student) {
+      throw this.buildNotFound('STUDENT_NOT_FOUND', 'Student not found.');
+    }
+
+    if (dto.email?.trim()) {
+      const email = dto.email.trim().toLowerCase();
+      const existing = await this.userRepository.findOne({ where: { email } });
+      if (existing && existing.id !== student.id) {
+        throw this.buildConflict(
+          'USER_ROLE_CONFLICT',
+          `Email ${email} already belongs to another account.`,
+        );
+      }
+      student.email = email;
+    }
+    if (dto.full_name?.trim()) {
+      student.full_name = dto.full_name.trim();
+    }
+    if (dto.student_id?.trim()) {
+      student.student_id = dto.student_id.trim();
+    }
+    if (dto.password?.trim()) {
+      student.password_hash = await bcrypt.hash(dto.password.trim(), 10);
+    }
+    await this.userRepository.save(student);
+
+    if (dto.class_id) {
+      const targetClass = await this.getSemesterClassOrThrow(semester.code, dto.class_id);
+      const semesterClassIds = await this.getSemesterClassIds(semester.code);
+      const existingMemberships =
+        semesterClassIds.length === 0
+          ? []
+          : await this.classMembershipRepository.find({
+              where: {
+                user_id: student.id,
+                class_id: In(semesterClassIds),
+              },
+            });
+      const currentMembership = existingMemberships[0];
+      if (!currentMembership) {
+        await this.classMembershipRepository.save(
+          this.classMembershipRepository.create({
+            class_id: targetClass.id,
+            user_id: student.id,
+          }),
+        );
+      } else if (currentMembership.class_id !== targetClass.id) {
+        await this.classMembershipRepository.delete({
+          class_id: currentMembership.class_id,
+          user_id: student.id,
+        });
+        await this.classMembershipRepository.save(
+          this.classMembershipRepository.create({
+            class_id: targetClass.id,
+            user_id: student.id,
+          }),
+        );
+      }
+    }
+
+    return this.getSemesterRosterStudent(semester.code, student.id);
+  }
+
+  async deleteSemesterStudent(semesterId: string, studentId: string) {
+    const semester = await this.getSemesterOrThrow(semesterId);
+    const semesterClassIds = await this.getSemesterClassIds(semester.code);
+    if (semesterClassIds.length === 0) {
+      throw this.buildNotFound(
+        'STUDENT_NOT_FOUND',
+        'Student is not enrolled in this semester.',
+      );
+    }
+
+    const memberships = await this.classMembershipRepository.find({
+      where: { user_id: studentId, class_id: In(semesterClassIds) },
+    });
+    if (memberships.length === 0) {
+      throw this.buildNotFound(
+        'STUDENT_NOT_FOUND',
+        'Student is not enrolled in this semester.',
+      );
+    }
+
+    for (const membership of memberships) {
+      await this.classMembershipRepository.delete({
+        class_id: membership.class_id,
+        user_id: membership.user_id,
+      });
+    }
+
+    return { success: true };
+  }
+
+  async bulkReassignTeachingAssignments(
+    semesterId: string,
+    actorUserId: string,
+    dto: BulkTeachingAssignmentDto,
+  ) {
+    const semester = await this.getSemesterOrThrow(semesterId);
+    this.assertSemesterRosterEditable(semester);
+
+    const touchedClasses: string[] = [];
+    for (const assignment of dto.assignments) {
+      const [targetClass, lecturer] = await Promise.all([
+        this.getSemesterClassOrThrow(semester.code, assignment.class_id),
+        this.userRepository.findOne({
+          where: { id: assignment.lecturer_id, role: Role.LECTURER },
+        }),
+      ]);
+
+      if (!lecturer) {
+        throw this.buildNotFound('LECTURER_NOT_FOUND', 'Lecturer not found.');
+      }
+
+      await this.classRepository.update(
+        { id: targetClass.id },
+        { lecturer_id: lecturer.id },
+      );
+      await this.upsertTeachingAssignment(
+        semester.id,
+        targetClass.id,
+        lecturer.id,
+        actorUserId,
+      );
+      touchedClasses.push(targetClass.id);
+    }
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'semester_teaching_assignment_bulk_updated',
+        actor_user_id: actorUserId,
+        semester_id: semester.id,
+        touched_class_count: touchedClasses.length,
+      }),
+    );
+
+    return this.getSemesterRoster(semester.id);
+  }
+
+  async getExaminerAssignments(semesterId: string) {
+    const semester = await this.getSemesterOrThrow(semesterId);
+    return this.buildExaminerAssignmentBoard(semester);
+  }
+
+  async bulkAssignExaminers(
+    semesterId: string,
+    actorUserId: string,
+    dto: BulkExaminerAssignmentDto,
+  ) {
+    const semester = await this.getSemesterOrThrow(semesterId);
+    if (semester.current_week < 10) {
+      throw this.buildBadRequest(
+        'WEEK_GATE_NOT_REACHED',
+        'Examiner assignment is only available from week 10 onward.',
+      );
+    }
+
+    const classes = await this.classRepository.find({
+      where: { semester: semester.code },
+      relations: ['lecturer'],
+    });
+    const classMap = new Map(classes.map((item) => [item.id, item]));
+    const uniqueLecturerIds = Array.from(
+      new Set(dto.assignments.flatMap((item) => item.lecturer_ids)),
+    );
+    const lecturers =
+      uniqueLecturerIds.length === 0
+        ? []
+        : await this.userRepository.find({
+            where: uniqueLecturerIds.map((id) => ({ id, role: Role.LECTURER })),
+          });
+    const lecturerMap = new Map(lecturers.map((lecturer) => [lecturer.id, lecturer]));
+
+    for (const assignment of dto.assignments) {
+      const targetClass = classMap.get(assignment.class_id);
+      if (!targetClass) {
+        throw this.buildBadRequest(
+          'CLASS_NOT_IN_SEMESTER',
+          'Class does not belong to the selected semester.',
+        );
+      }
+
+      const dedupedLecturerIds = Array.from(new Set(assignment.lecturer_ids));
+      for (const lecturerId of dedupedLecturerIds) {
+        const lecturer = lecturerMap.get(lecturerId);
+        if (!lecturer) {
+          throw this.buildNotFound('LECTURER_NOT_FOUND', 'Lecturer not found.');
+        }
+        if (targetClass.lecturer_id === lecturerId) {
+          throw this.buildConflict(
+            'EXAMINER_OWN_CLASS_CONFLICT',
+            'Lecturer cannot examine a class they are teaching.',
+            { class_id: targetClass.id, lecturer_id: lecturerId },
+          );
+        }
+      }
+    }
+
+    const targetClassIds = dto.assignments.map((assignment) => assignment.class_id);
+    if (targetClassIds.length > 0) {
+      await this.examinerAssignmentRepository.delete({
+        semester_id: semester.id,
+        class_id: In(targetClassIds),
+      });
+    }
+
+    const inserts = dto.assignments.flatMap((assignment) =>
+      Array.from(new Set(assignment.lecturer_ids)).map((lecturerId) =>
+        this.examinerAssignmentRepository.create({
+          semester_id: semester.id,
+          class_id: assignment.class_id,
+          lecturer_id: lecturerId,
+          assigned_by_id: actorUserId,
+        }),
+      ),
+    );
+    if (inserts.length > 0) {
+      await this.examinerAssignmentRepository.save(inserts);
+    }
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'semester_examiner_assignment_bulk_updated',
+        actor_user_id: actorUserId,
+        semester_id: semester.id,
+        assignment_count: inserts.length,
+      }),
+    );
+
+    return this.buildExaminerAssignmentBoard(semester);
   }
 
   async getImportBatches(semesterId: string) {
@@ -1020,6 +1613,13 @@ export class SemesterService {
         }),
       );
 
+      await this.upsertTeachingAssignment(
+        semester.id,
+        savedClass.id,
+        user!.id,
+        uploadedById,
+      );
+
       await this.groupRepository.insert(
         Array.from({ length: 7 }).map((_, index) => ({
           name: `Group ${index + 1}`,
@@ -1125,12 +1725,26 @@ export class SemesterService {
               'updated',
               `${semester.code}:${normalizedClassCode}`,
             );
+            await this.upsertTeachingAssignment(
+              semester.id,
+              existingClass.id,
+              user!.id,
+              uploadedById,
+            );
           } else if (existingClass) {
             markCounter(
               'classes',
               'updated',
               `${semester.code}:${normalizedClassCode}`,
             );
+            if (mode === 'IMPORT' && user?.id) {
+              await this.upsertTeachingAssignment(
+                semester.id,
+                existingClass.id,
+                user.id,
+                uploadedById,
+              );
+            }
           }
 
           summary.rows.success += 1;
@@ -1360,7 +1974,9 @@ export class SemesterService {
   }
 
   private serializeReviewGroup(
-    group: Pick<Group, 'id' | 'name' | 'project_name'> & { topic?: { name?: string | null } | null },
+    group: Pick<Group, 'id' | 'name' | 'project_name'> & {
+      topic?: { name?: string | null } | null;
+    },
     review: GroupReview | undefined,
     milestone: ReviewMilestoneContext | null,
   ) {
@@ -1426,9 +2042,7 @@ export class SemesterService {
     return warnings;
   }
 
-  private async captureReviewSnapshot(
-    group: Pick<Group, 'id'>,
-  ): Promise<{
+  private async captureReviewSnapshot(group: Pick<Group, 'id'>): Promise<{
     task_total: number;
     task_done: number;
     commit_total: number | null;
@@ -1498,6 +2112,195 @@ export class SemesterService {
     };
   }
 
+  private async buildExaminerAssignmentBoard(semester: Semester) {
+    const classes = await this.classRepository.find({
+      where: { semester: semester.code },
+      relations: ['lecturer'],
+      order: { code: 'ASC' },
+    });
+    const classIds = classes.map((item) => item.id);
+    const [lecturers, examinerAssignments] = await Promise.all([
+      this.userRepository.find({
+        where: { role: Role.LECTURER },
+        order: { full_name: 'ASC', email: 'ASC' },
+      }),
+      classIds.length === 0
+        ? Promise.resolve([])
+        : this.examinerAssignmentRepository.find({
+            where: { semester_id: semester.id, class_id: In(classIds) },
+            relations: ['lecturer'],
+          }),
+    ]);
+
+    const examinerByClassId = new Map<string, ExaminerAssignment[]>();
+    for (const assignment of examinerAssignments) {
+      const bucket = examinerByClassId.get(assignment.class_id) || [];
+      bucket.push(assignment);
+      examinerByClassId.set(assignment.class_id, bucket);
+    }
+
+    const teachingByLecturer = new Map<
+      string,
+      Array<{ class_id: string; class_code: string; class_name: string }>
+    >();
+    for (const classItem of classes) {
+      if (!classItem.lecturer_id) continue;
+      const bucket = teachingByLecturer.get(classItem.lecturer_id) || [];
+      bucket.push({
+        class_id: classItem.id,
+        class_code: classItem.code,
+        class_name: classItem.name,
+      });
+      teachingByLecturer.set(classItem.lecturer_id, bucket);
+    }
+
+    return {
+      semester: this.serializeSemester(semester),
+      gate: {
+        current_week: semester.current_week,
+        can_assign: semester.current_week >= 10,
+        reason: semester.current_week >= 10 ? null : 'WEEK_GATE_NOT_REACHED',
+      },
+      lecturers: lecturers.map((lecturer) => ({
+        id: lecturer.id,
+        email: lecturer.email,
+        full_name: lecturer.full_name,
+        teaching_classes: teachingByLecturer.get(lecturer.id) || [],
+      })),
+      classes: classes.map((classItem) => ({
+        id: classItem.id,
+        code: classItem.code,
+        name: classItem.name,
+        lecturer_id: classItem.lecturer_id,
+        lecturer_name: classItem.lecturer?.full_name || null,
+        examiner_assignments: (examinerByClassId.get(classItem.id) || []).map(
+          (assignment) => ({
+            lecturer_id: assignment.lecturer_id,
+            lecturer_name:
+              assignment.lecturer?.full_name || assignment.lecturer?.email,
+            lecturer_email: assignment.lecturer?.email || null,
+          }),
+        ),
+      })),
+    };
+  }
+
+  private async getSemesterClassIds(semesterCode: string) {
+    const classes = await this.classRepository.find({
+      where: { semester: semesterCode },
+      select: { id: true } as any,
+    });
+    return classes.map((classItem) => classItem.id);
+  }
+
+  private async getSemesterClassOrThrow(semesterCode: string, classId: string) {
+    const targetClass = await this.classRepository.findOne({
+      where: { id: classId, semester: semesterCode },
+    });
+    if (!targetClass) {
+      throw this.buildBadRequest(
+        'CLASS_NOT_IN_SEMESTER',
+        'Class does not belong to the selected semester.',
+      );
+    }
+    return targetClass;
+  }
+
+  private async getSemesterRosterStudent(semesterCode: string, studentId: string) {
+    const semesterClassIds = await this.getSemesterClassIds(semesterCode);
+    const membership =
+      semesterClassIds.length === 0
+        ? null
+        : await this.classMembershipRepository.findOne({
+            where: {
+              user_id: studentId,
+              class_id: In(semesterClassIds),
+            },
+            relations: ['class', 'user'],
+          });
+
+    if (!membership?.user || !membership.class) {
+      throw this.buildNotFound(
+        'STUDENT_NOT_FOUND',
+        'Student is not enrolled in this semester.',
+      );
+    }
+
+    return {
+      id: membership.user_id,
+      email: membership.user.email,
+      full_name: membership.user.full_name,
+      student_id: membership.user.student_id,
+      class_id: membership.class_id,
+      class_code: membership.class.code,
+      class_name: membership.class.name,
+    };
+  }
+
+  private async upsertTeachingAssignment(
+    semesterId: string,
+    classId: string,
+    lecturerId: string,
+    actorUserId?: string,
+  ) {
+    const existing = await this.teachingAssignmentRepository.findOne({
+      where: { class_id: classId },
+    });
+
+    if (existing) {
+      existing.semester_id = semesterId;
+      existing.lecturer_id = lecturerId;
+      existing.assigned_by_id = actorUserId || existing.assigned_by_id;
+      return this.teachingAssignmentRepository.save(existing);
+    }
+
+    return this.teachingAssignmentRepository.save(
+      this.teachingAssignmentRepository.create({
+        semester_id: semesterId,
+        class_id: classId,
+        lecturer_id: lecturerId,
+        assigned_by_id: actorUserId || null,
+      }),
+    );
+  }
+
+  private assertSemesterRosterEditable(semester: Semester) {
+    if (
+      ![SemesterStatus.UPCOMING, SemesterStatus.ACTIVE].includes(
+        semester.status,
+      )
+    ) {
+      throw this.buildBadRequest(
+        'SEMESTER_NOT_EDITABLE',
+        'Roster can only be managed for UPCOMING or ACTIVE semesters.',
+      );
+    }
+  }
+
+  private buildBadRequest(
+    code: RosterErrorCode,
+    message: string,
+    details?: Record<string, unknown>,
+  ) {
+    return new BadRequestException({ code, message, details });
+  }
+
+  private buildConflict(
+    code: RosterErrorCode,
+    message: string,
+    details?: Record<string, unknown>,
+  ) {
+    return new ConflictException({ code, message, details });
+  }
+
+  private buildNotFound(
+    code: RosterErrorCode,
+    message: string,
+    details?: Record<string, unknown>,
+  ) {
+    return new NotFoundException({ code, message, details });
+  }
+
   private serializeSemester(semester: Semester): SerializedSemester {
     return {
       id: semester.id,
@@ -1523,7 +2326,7 @@ export class SemesterService {
 
     const allowedRoles =
       this.configService.get<string>('DEMO_WEEK_OVERRIDE_ALLOWED_ROLES') ||
-      Role.ADMIN;
+      `${Role.ADMIN},${Role.LECTURER}`;
     const normalizedAllowedRoles = allowedRoles
       .split(',')
       .map((value) => value.trim().toUpperCase())

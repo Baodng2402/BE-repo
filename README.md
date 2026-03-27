@@ -62,6 +62,39 @@ A robust backend API built with NestJS framework, featuring comprehensive authen
 
 ---
 
+## Semester Roster APIs
+
+Admin semester roster management is exposed under ` /api/admin/semesters/:semesterId `:
+
+- `GET /roster`
+  - returns semester roster snapshot for lecturers, students, and classes
+- `POST /roster/lecturers`
+  - creates a lecturer account for semester teaching/examiner assignment
+- `PATCH /roster/lecturers/:userId`
+  - updates lecturer profile data
+- `DELETE /roster/lecturers/:userId`
+  - deletes lecturer only when not assigned to teaching/examiner duties
+- `POST /roster/students`
+  - creates a student account and enrolls it into a class in the semester
+- `PATCH /roster/students/:userId`
+  - updates student profile or moves class membership within the semester
+- `DELETE /roster/students/:userId`
+  - removes student from semester roster by deleting semester-scoped class membership
+- `PATCH /teaching-assignments`
+  - bulk reassigns lecturers to classes; keeps `Class.lecturer_id` and `TeachingAssignment` in sync
+- `GET /examiner-assignments`
+  - returns examiner assignment board with current week gate information
+- `PATCH /examiner-assignments`
+  - replaces examiner assignments for the selected classes; blocked before week 10 and rejects lecturer-own-class conflicts
+
+Key rules:
+
+- Semester roster editing is allowed only for `UPCOMING` and `ACTIVE`.
+- Examiner assignment opens only when `semester.current_week >= 10`.
+- A lecturer cannot examine a class they are currently teaching.
+
+---
+
 ## 📦 Prerequisites
 
 Before you begin, ensure you have the following installed:

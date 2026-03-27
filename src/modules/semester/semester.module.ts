@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import {
   Class,
   ClassMembership,
+  ExaminerAssignment,
   Group,
   GroupMembership,
   GroupRepository,
@@ -12,6 +13,7 @@ import {
   Semester,
   SemesterWeekAuditLog,
   Task,
+  TeachingAssignment,
   User,
 } from '../../entities';
 import { GithubModule } from '../github/github.module';
@@ -29,6 +31,8 @@ import { SemesterService } from './semester.service';
       ImportRowLog,
       Class,
       ClassMembership,
+      TeachingAssignment,
+      ExaminerAssignment,
       Group,
       GroupMembership,
       GroupRepository,

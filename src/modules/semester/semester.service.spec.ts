@@ -11,6 +11,7 @@ import {
 import {
   Class,
   ClassMembership,
+  ExaminerAssignment,
   Group,
   GroupMembership,
   GroupRepository,
@@ -20,6 +21,7 @@ import {
   Semester,
   SemesterWeekAuditLog,
   Task,
+  TeachingAssignment,
   User,
 } from '../../entities';
 import { GithubService } from '../github/github.service';
@@ -29,10 +31,12 @@ function createMockRepository() {
   return {
     findOne: jest.fn(),
     find: jest.fn(),
+    count: jest.fn(),
     create: jest.fn((dto) => dto),
     save: jest.fn(),
     update: jest.fn(),
     insert: jest.fn(),
+    delete: jest.fn(),
   };
 }
 
@@ -43,6 +47,8 @@ describe('SemesterService', () => {
   let rowLogRepo: ReturnType<typeof createMockRepository>;
   let classRepo: ReturnType<typeof createMockRepository>;
   let classMembershipRepo: ReturnType<typeof createMockRepository>;
+  let teachingAssignmentRepo: ReturnType<typeof createMockRepository>;
+  let examinerAssignmentRepo: ReturnType<typeof createMockRepository>;
   let groupRepo: ReturnType<typeof createMockRepository>;
   let groupMembershipRepo: ReturnType<typeof createMockRepository>;
   let groupRepoLinkRepo: ReturnType<typeof createMockRepository>;
@@ -59,6 +65,8 @@ describe('SemesterService', () => {
     rowLogRepo = createMockRepository();
     classRepo = createMockRepository();
     classMembershipRepo = createMockRepository();
+    teachingAssignmentRepo = createMockRepository();
+    examinerAssignmentRepo = createMockRepository();
     groupRepo = createMockRepository();
     groupMembershipRepo = createMockRepository();
     groupRepoLinkRepo = createMockRepository();
@@ -86,6 +94,11 @@ describe('SemesterService', () => {
       id: entity.id ?? 'membership-1',
       ...entity,
     }));
+    teachingAssignmentRepo.save.mockImplementation(async (entity) => ({
+      id: entity.id ?? 'teaching-assignment-1',
+      ...entity,
+    }));
+    examinerAssignmentRepo.save.mockImplementation(async (entity) => entity);
     weekAuditRepo.save.mockImplementation(async (entity) => ({
       id: entity.id ?? 'audit-1',
       ...entity,
@@ -99,7 +112,7 @@ describe('SemesterService', () => {
         case 'DEMO_WEEK_OVERRIDE_ENABLED':
           return 'true';
         case 'DEMO_WEEK_OVERRIDE_ALLOWED_ROLES':
-          return 'ADMIN';
+          return 'ADMIN,LECTURER';
         default:
           return undefined;
       }
@@ -116,6 +129,14 @@ describe('SemesterService', () => {
         {
           provide: getRepositoryToken(ClassMembership),
           useValue: classMembershipRepo,
+        },
+        {
+          provide: getRepositoryToken(TeachingAssignment),
+          useValue: teachingAssignmentRepo,
+        },
+        {
+          provide: getRepositoryToken(ExaminerAssignment),
+          useValue: examinerAssignmentRepo,
         },
         { provide: getRepositoryToken(Group), useValue: groupRepo },
         {
@@ -379,7 +400,10 @@ describe('SemesterService', () => {
     expect(result.warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: 'WEEK2_TOPIC_NOT_FINALIZED' }),
-        expect.objectContaining({ code: 'WEEK1_NO_GROUP', class_id: 'class-2' }),
+        expect.objectContaining({
+          code: 'WEEK1_NO_GROUP',
+          class_id: 'class-2',
+        }),
       ]),
     );
   });
@@ -862,5 +886,178 @@ describe('SemesterService', () => {
     expect(result.rows.find((row) => row.row_number === 3)?.message).toContain(
       'non-student account',
     );
+  });
+
+  it('returns semester roster with lecturer, student, and class summary', async () => {
+    semesterRepo.findOne.mockResolvedValue({
+      id: 'semester-1',
+      code: 'SP26',
+      name: 'Spring 2026',
+      status: SemesterStatus.ACTIVE,
+      current_week: 10,
+      start_date: '2026-01-01',
+      end_date: '2026-05-01',
+    });
+    classRepo.find.mockResolvedValue([
+      {
+        id: 'class-1',
+        code: 'SWP391',
+        name: 'Software Project',
+        semester: 'SP26',
+        lecturer_id: 'lecturer-1',
+        lecturer: { id: 'lecturer-1', full_name: 'Lecturer One' },
+      },
+    ]);
+    teachingAssignmentRepo.find.mockResolvedValue([]);
+    examinerAssignmentRepo.find.mockResolvedValue([]);
+    classMembershipRepo.find.mockResolvedValue([
+      {
+        class_id: 'class-1',
+        user_id: 'student-1',
+        class: { id: 'class-1', code: 'SWP391', name: 'Software Project' },
+        user: {
+          id: 'student-1',
+          email: 'student@fpt.edu.vn',
+          full_name: 'Student One',
+          student_id: 'SE123',
+        },
+      },
+    ]);
+    userRepo.find.mockResolvedValue([
+      {
+        id: 'lecturer-1',
+        email: 'lecturer@fpt.edu.vn',
+        full_name: 'Lecturer One',
+        role: Role.LECTURER,
+      },
+    ]);
+
+    const result = await service.getSemesterRoster('semester-1');
+
+    expect(result.summary.classes_total).toBe(1);
+    expect(result.summary.students_total).toBe(1);
+    expect(result.classes[0].student_count).toBe(1);
+    expect(result.lecturers[0].teaching_classes).toHaveLength(1);
+  });
+
+  it('reassigns lecturer teaching assignments in bulk', async () => {
+    semesterRepo.findOne.mockResolvedValue({
+      id: 'semester-1',
+      code: 'SP26',
+      name: 'Spring 2026',
+      status: SemesterStatus.ACTIVE,
+      current_week: 8,
+      start_date: '2026-01-01',
+      end_date: '2026-05-01',
+    });
+    classRepo.findOne.mockResolvedValue({
+      id: 'class-1',
+      code: 'SWP391',
+      name: 'Software Project',
+      semester: 'SP26',
+      lecturer_id: 'lecturer-old',
+    });
+    userRepo.findOne.mockResolvedValue({
+      id: 'lecturer-1',
+      email: 'lecturer@fpt.edu.vn',
+      role: Role.LECTURER,
+    });
+    teachingAssignmentRepo.findOne.mockResolvedValue(null);
+    classRepo.find.mockResolvedValue([
+      {
+        id: 'class-1',
+        code: 'SWP391',
+        name: 'Software Project',
+        semester: 'SP26',
+        lecturer_id: 'lecturer-1',
+        lecturer: { id: 'lecturer-1', full_name: 'Lecturer One' },
+      },
+    ]);
+    teachingAssignmentRepo.find.mockResolvedValue([
+      {
+        id: 'ta-1',
+        class_id: 'class-1',
+        lecturer_id: 'lecturer-1',
+        lecturer: { id: 'lecturer-1', full_name: 'Lecturer One' },
+      },
+    ]);
+    examinerAssignmentRepo.find.mockResolvedValue([]);
+    classMembershipRepo.find.mockResolvedValue([]);
+    userRepo.find.mockResolvedValue([
+      {
+        id: 'lecturer-1',
+        email: 'lecturer@fpt.edu.vn',
+        full_name: 'Lecturer One',
+        role: Role.LECTURER,
+      },
+    ]);
+
+    const result = await service.bulkReassignTeachingAssignments(
+      'semester-1',
+      'admin-1',
+      {
+        assignments: [{ class_id: 'class-1', lecturer_id: 'lecturer-1' }],
+      },
+    );
+
+    expect(classRepo.update).toHaveBeenCalledWith(
+      { id: 'class-1' },
+      { lecturer_id: 'lecturer-1' },
+    );
+    expect(result.classes[0].lecturer_id).toBe('lecturer-1');
+  });
+
+  it('blocks examiner assignment before week 10', async () => {
+    semesterRepo.findOne.mockResolvedValue({
+      id: 'semester-1',
+      code: 'SP26',
+      name: 'Spring 2026',
+      status: SemesterStatus.ACTIVE,
+      current_week: 9,
+      start_date: '2026-01-01',
+      end_date: '2026-05-01',
+    });
+
+    await expect(
+      service.bulkAssignExaminers('semester-1', 'admin-1', {
+        assignments: [{ class_id: 'class-1', lecturer_ids: ['lecturer-1'] }],
+      }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects examiner assignment when lecturer teaches the same class', async () => {
+    semesterRepo.findOne.mockResolvedValue({
+      id: 'semester-1',
+      code: 'SP26',
+      name: 'Spring 2026',
+      status: SemesterStatus.ACTIVE,
+      current_week: 10,
+      start_date: '2026-01-01',
+      end_date: '2026-05-01',
+    });
+    classRepo.find.mockResolvedValue([
+      {
+        id: 'class-1',
+        code: 'SWP391',
+        name: 'Software Project',
+        semester: 'SP26',
+        lecturer_id: 'lecturer-1',
+        lecturer: { id: 'lecturer-1', full_name: 'Lecturer One' },
+      },
+    ]);
+    userRepo.find.mockResolvedValue([
+      {
+        id: 'lecturer-1',
+        email: 'lecturer@fpt.edu.vn',
+        full_name: 'Lecturer One',
+        role: Role.LECTURER,
+      },
+    ]);
+
+    await expect(
+      service.bulkAssignExaminers('semester-1', 'admin-1', {
+        assignments: [{ class_id: 'class-1', lecturer_ids: ['lecturer-1'] }],
+      }),
+    ).rejects.toThrow(ConflictException);
   });
 });

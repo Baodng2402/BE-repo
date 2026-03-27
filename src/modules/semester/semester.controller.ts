@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -25,8 +26,14 @@ import type { AuthorizedRequest } from '../auth/auth.controller';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { BulkExaminerAssignmentDto } from './dto/bulk-examiner-assignment.dto';
+import { BulkTeachingAssignmentDto } from './dto/bulk-teaching-assignment.dto';
 import { CreateSemesterDto } from './dto/create-semester.dto';
+import { CreateSemesterLecturerDto } from './dto/create-semester-lecturer.dto';
+import { CreateSemesterStudentDto } from './dto/create-semester-student.dto';
 import { UpdateSemesterDto } from './dto/update-semester.dto';
+import { UpdateSemesterLecturerDto } from './dto/update-semester-lecturer.dto';
+import { UpdateSemesterStudentDto } from './dto/update-semester-student.dto';
 import { SemesterService } from './semester.service';
 import { parseSemesterImportFile } from './utils/semester-import.util';
 
@@ -63,6 +70,98 @@ export class SemesterController {
   @ApiOperation({ summary: 'Get recent import batches for a semester' })
   async getImportBatches(@Param('id', ParseUUIDPipe) id: string) {
     return this.semesterService.getImportBatches(id);
+  }
+
+  @Get(':id/roster')
+  @ApiOperation({ summary: 'Get lecturer, student, and class roster for a semester' })
+  async getSemesterRoster(@Param('id', ParseUUIDPipe) id: string) {
+    return this.semesterService.getSemesterRoster(id);
+  }
+
+  @Post(':id/roster/lecturers')
+  @ApiOperation({ summary: 'Create lecturer account for semester roster management' })
+  async createSemesterLecturer(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateSemesterLecturerDto,
+  ) {
+    return this.semesterService.createSemesterLecturer(id, dto);
+  }
+
+  @Patch(':id/roster/lecturers/:userId')
+  @ApiOperation({ summary: 'Update lecturer account used in semester roster' })
+  async updateSemesterLecturer(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() dto: UpdateSemesterLecturerDto,
+  ) {
+    return this.semesterService.updateSemesterLecturer(id, userId, dto);
+  }
+
+  @Patch(':id/roster/students/:userId')
+  @ApiOperation({ summary: 'Update student account or move class membership within a semester' })
+  async updateSemesterStudent(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() dto: UpdateSemesterStudentDto,
+  ) {
+    return this.semesterService.updateSemesterStudent(id, userId, dto);
+  }
+
+  @Post(':id/roster/students')
+  @ApiOperation({ summary: 'Create student account and enroll into a semester class' })
+  async createSemesterStudent(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateSemesterStudentDto,
+  ) {
+    return this.semesterService.createSemesterStudent(id, dto);
+  }
+
+  @Patch(':id/teaching-assignments')
+  @ApiOperation({ summary: 'Bulk reassign lecturers to semester classes' })
+  async bulkReassignTeachingAssignments(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: AuthorizedRequest,
+    @Body() dto: BulkTeachingAssignmentDto,
+  ) {
+    return this.semesterService.bulkReassignTeachingAssignments(
+      id,
+      req.user.id,
+      dto,
+    );
+  }
+
+  @Get(':id/examiner-assignments')
+  @ApiOperation({ summary: 'Get examiner assignment board for a semester' })
+  async getExaminerAssignments(@Param('id', ParseUUIDPipe) id: string) {
+    return this.semesterService.getExaminerAssignments(id);
+  }
+
+  @Patch(':id/examiner-assignments')
+  @ApiOperation({ summary: 'Replace examiner assignments for semester classes' })
+  async bulkAssignExaminers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: AuthorizedRequest,
+    @Body() dto: BulkExaminerAssignmentDto,
+  ) {
+    return this.semesterService.bulkAssignExaminers(id, req.user.id, dto);
+  }
+
+  @Delete(':id/roster/lecturers/:userId')
+  @ApiOperation({ summary: 'Delete lecturer account if it is safe to remove' })
+  async deleteSemesterLecturer(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.semesterService.deleteSemesterLecturer(id, userId);
+  }
+
+  @Delete(':id/roster/students/:userId')
+  @ApiOperation({ summary: 'Remove student from semester roster' })
+  async deleteSemesterStudent(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.semesterService.deleteSemesterStudent(id, userId);
   }
 
   @Post(':id/import')
@@ -109,4 +208,3 @@ export class SemesterController {
     );
   }
 }
-

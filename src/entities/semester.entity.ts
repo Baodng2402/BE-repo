@@ -7,9 +7,11 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { SemesterStatus } from '../common/enums/semester-status.enum';
+import { ExaminerAssignment } from './examiner-assignment.entity';
 import { GroupReview } from './group-review.entity';
 import { ImportBatch } from './import-batch.entity';
 import { SemesterWeekAuditLog } from './semester-week-audit-log.entity';
+import { TeachingAssignment } from './teaching-assignment.entity';
 
 @Entity('Semester')
 export class Semester {
@@ -52,4 +54,16 @@ export class Semester {
 
   @OneToMany(() => GroupReview, (review) => review.semester)
   group_reviews: GroupReview[];
+
+  @OneToMany(
+    () => TeachingAssignment,
+    (assignment) => assignment.semester,
+  )
+  teaching_assignments: TeachingAssignment[];
+
+  @OneToMany(
+    () => ExaminerAssignment,
+    (assignment) => assignment.semester,
+  )
+  examiner_assignments: ExaminerAssignment[];
 }
