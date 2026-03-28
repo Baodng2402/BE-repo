@@ -7,7 +7,6 @@ describe('parseSemesterImportFile', () => {
     const sheet = workbook.addWorksheet('Import');
     sheet.addRow([
       'semester_code',
-      'role',
       'email',
       'full_name',
       'class_code',
@@ -16,21 +15,19 @@ describe('parseSemesterImportFile', () => {
     ]);
     sheet.addRow([
       'SP26',
-      'LECTURER',
-      'lecturer@fpt.edu.vn',
-      'Lecturer A',
-      'SWP391',
-      'Software Project',
-      '',
-    ]);
-    sheet.addRow([
-      'SP26',
-      'STUDENT',
-      'student@fpt.edu.vn',
-      'Student B',
+      'student1@fpt.edu.vn',
+      'Student A',
       'SWP391',
       'Software Project',
       'SE0001',
+    ]);
+    sheet.addRow([
+      'SP26',
+      'student2@fpt.edu.vn',
+      'Student B',
+      'SWP391',
+      'Software Project',
+      'SE0002',
     ]);
 
     const buffer = await workbook.xlsx.writeBuffer();
@@ -43,22 +40,22 @@ describe('parseSemesterImportFile', () => {
     expect(result).toHaveLength(2);
     expect(result[0]).toMatchObject({
       semester_code: 'SP26',
-      role: 'LECTURER',
-      email: 'lecturer@fpt.edu.vn',
+      email: 'student1@fpt.edu.vn',
       class_code: 'SWP391',
+      student_id: 'SE0001',
     });
     expect(result[1]).toMatchObject({
       semester_code: 'SP26',
-      role: 'STUDENT',
-      student_id: 'SE0001',
+      email: 'student2@fpt.edu.vn',
+      student_id: 'SE0002',
     });
   });
 
   it('throws when required semester-first columns are missing', async () => {
     const workbook = new Workbook();
     const sheet = workbook.addWorksheet('Import');
-    sheet.addRow(['role', 'email', 'class_code', 'class_name']);
-    sheet.addRow(['LECTURER', 'lecturer@fpt.edu.vn', 'SWP391', 'Software']);
+    sheet.addRow(['email', 'class_code', 'class_name']);
+    sheet.addRow(['student@fpt.edu.vn', 'SWP391', 'Software']);
 
     const buffer = await workbook.xlsx.writeBuffer();
 

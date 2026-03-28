@@ -728,7 +728,7 @@ describe('SemesterService', () => {
     ).rejects.toThrow(BadRequestException);
   });
 
-  it('validates a clean lecturer + student workbook preview', async () => {
+  it('validates a clean student workbook preview', async () => {
     semesterRepo.findOne.mockResolvedValue({
       id: 'semester-1',
       code: 'SP26',
@@ -746,22 +746,20 @@ describe('SemesterService', () => {
         {
           row_number: 2,
           semester_code: 'SP26',
-          role: 'LECTURER',
-          email: 'lecturer@fpt.edu.vn',
-          full_name: 'Lecturer One',
-          class_code: 'SWP391',
-          class_name: 'Software Project',
-          student_id: '',
-        },
-        {
-          row_number: 3,
-          semester_code: 'SP26',
-          role: 'STUDENT',
-          email: 'student@fpt.edu.vn',
+          email: 'student1@fpt.edu.vn',
           full_name: 'Student One',
           class_code: 'SWP391',
           class_name: 'Software Project',
           student_id: 'SE0001',
+        },
+        {
+          row_number: 3,
+          semester_code: 'SP26',
+          email: 'student2@fpt.edu.vn',
+          full_name: 'Student Two',
+          class_code: 'SWP391',
+          class_name: 'Software Project',
+          student_id: 'SE0002',
         },
       ],
       'VALIDATE',
@@ -770,9 +768,9 @@ describe('SemesterService', () => {
     expect(result.readyForImport).toBe(true);
     expect(result.summary.rows.success).toBe(2);
     expect(result.summary.rows.failed).toBe(0);
-    expect(result.summary.classes.created).toBe(0);
-    expect(result.summary.lecturers.created).toBe(1);
-    expect(result.summary.students.created).toBe(1);
+    expect(result.summary.classes.created).toBe(1);
+    expect(result.summary.lecturers.created).toBe(0);
+    expect(result.summary.students.created).toBe(2);
     expect(result.rows).toHaveLength(2);
   });
 
@@ -794,18 +792,7 @@ describe('SemesterService', () => {
       [
         {
           row_number: 2,
-          semester_code: 'SP26',
-          role: 'LECTURER',
-          email: 'lecturer@fpt.edu.vn',
-          full_name: 'Lecturer One',
-          class_code: 'SWP391',
-          class_name: 'Software Project',
-          student_id: '',
-        },
-        {
-          row_number: 3,
           semester_code: 'SP25',
-          role: 'STUDENT',
           email: 'wrong-semester@fpt.edu.vn',
           full_name: 'Wrong Semester',
           class_code: 'SWP391',
@@ -813,9 +800,8 @@ describe('SemesterService', () => {
           student_id: 'SE0002',
         },
         {
-          row_number: 4,
+          row_number: 3,
           semester_code: 'SP26',
-          role: 'STUDENT',
           email: 'student@fpt.edu.vn',
           full_name: 'Student One',
           class_code: 'SWP391',
@@ -827,7 +813,7 @@ describe('SemesterService', () => {
     );
 
     expect(result.readyForImport).toBe(false);
-    expect(result.summary.rows.success).toBe(2);
+    expect(result.summary.rows.success).toBe(1);
     expect(result.summary.rows.failed).toBe(1);
     expect(result.summary.classes.created).toBe(1);
     expect(result.summary.enrollments.created).toBe(1);
@@ -861,17 +847,6 @@ describe('SemesterService', () => {
         {
           row_number: 2,
           semester_code: 'SP26',
-          role: 'LECTURER',
-          email: 'lecturer@fpt.edu.vn',
-          full_name: 'Lecturer One',
-          class_code: 'SWP391',
-          class_name: 'Software Project',
-          student_id: '',
-        },
-        {
-          row_number: 3,
-          semester_code: 'SP26',
-          role: 'STUDENT',
           email: 'student@fpt.edu.vn',
           full_name: 'Wrong Role',
           class_code: 'SWP391',
@@ -883,7 +858,7 @@ describe('SemesterService', () => {
     );
 
     expect(result.summary.rows.failed).toBe(1);
-    expect(result.rows.find((row) => row.row_number === 3)?.message).toContain(
+    expect(result.rows.find((row) => row.row_number === 2)?.message).toContain(
       'non-student account',
     );
   });

@@ -1548,7 +1548,6 @@ export class SemesterService {
     );
 
     const rowLogs: ImportRowLog[] = [];
-    const lecturerPlans = new Map<string, SemesterImportRow>();
     const existingUsers = new Map(
       (
         await this.userRepository.find({
@@ -1569,77 +1568,34 @@ export class SemesterService {
     );
     const createdClasses = new Map<string, Class>();
 
-    for (const row of rows) {
-      if (row.role.trim().toUpperCase() === Role.LECTURER) {
-        const key = row.class_code.trim().toUpperCase();
-        if (!lecturerPlans.has(key)) {
-          lecturerPlans.set(key, {
-            ...row,
-            class_code: key,
-            semester_code: row.semester_code.trim().toUpperCase(),
-            role: Role.LECTURER,
-          });
-        }
-      }
-    }
-
-    const ensureLecturerUser = async (plan: SemesterImportRow) => {
-      const email = plan.email.toLowerCase();
-      let user = existingUsers.get(email);
-      let created = false;
-
-      if (user && user.role !== Role.LECTURER) {
-        throw new BadRequestException(
-          `Email ${plan.email} already belongs to a non-lecturer account.`,
-        );
-      }
-
-      if (!user && mode === 'IMPORT') {
-        const tempPassword = randomBytes(8).toString('hex');
-        user = await this.userRepository.save(
-          this.userRepository.create({
-            email,
-            full_name: plan.full_name,
-            password_hash: await bcrypt.hash(tempPassword, 10),
-            role: Role.LECTURER,
-            primary_provider: AuthProvider.EMAIL,
-          }),
-        );
-        existingUsers.set(email, user);
-        created = true;
-      }
-
-      if (!user && mode === 'VALIDATE') {
-        created = true;
-      }
-
-      return { user, created };
-    };
-
-    const ensureClassForCode = async (classCode: string) => {
+    const ensureClassForCode = async (classCode: string, className: string) => {
       const key = `${semester.code}:${classCode}`;
       const currentClass = createdClasses.get(key) || existingClasses.get(key);
       if (currentClass) {
+        if (
+          mode === 'IMPORT' &&
+          currentClass.id.startsWith('preview-') === false &&
+          currentClass.name !== className
+        ) {
+          await this.classRepository.update(
+            { id: currentClass.id },
+            { name: className },
+          );
+          currentClass.name = className;
+        }
+
+        markCounter('classes', 'updated', key);
         return currentClass;
       }
 
-      const plan = lecturerPlans.get(classCode);
-      if (!plan) {
-        return null;
-      }
-
-      const { user, created } = await ensureLecturerUser(plan);
-      if (created) {
-        markCounter('lecturers', 'created', plan.email.toLowerCase());
-      }
-
       if (mode === 'VALIDATE') {
+        markCounter('classes', 'created', key);
         return {
           id: `preview-${classCode}`,
           code: classCode,
-          name: plan.class_name,
+          name: className,
           semester: semester.code,
-          lecturer_id: user?.id || `preview-lecturer-${classCode}`,
+          lecturer_id: null,
           enrollment_key: 'PREVIEW',
         } as Class;
       }
@@ -1647,25 +1603,18 @@ export class SemesterService {
       const savedClass = await this.classRepository.save(
         this.classRepository.create({
           code: classCode,
-          name: plan.class_name,
+          name: className,
           semester: semester.code,
-          lecturer_id: user!.id,
+          lecturer_id: null,
           enrollment_key: randomBytes(4).toString('hex').toUpperCase(),
         }),
-      );
-
-      await this.upsertTeachingAssignment(
-        semester.id,
-        savedClass.id,
-        user!.id,
-        uploadedById,
       );
 
       await this.groupRepository.insert(
         Array.from({ length: 7 }).map((_, index) => ({
           name: `Group ${index + 1}`,
           class_id: savedClass.id,
-          created_by_id: user!.id,
+          created_by_id: uploadedById,
           semester: semester.code,
         })),
       );
@@ -1677,7 +1626,8 @@ export class SemesterService {
     };
 
     for (const row of rows) {
-      const normalizedRole = row.role.trim().toUpperCase();
+      const normalizedRole = row.role?.trim().toUpperCase() || '';
+      const resolvedRole = Role.STUDENT;
       const normalizedSemesterCode = row.semester_code.trim().toUpperCase();
       const normalizedEmail = row.email.trim().toLowerCase();
       const normalizedClassCode = row.class_code.trim().toUpperCase();
@@ -1690,7 +1640,7 @@ export class SemesterService {
           this.importRowLogRepository.create({
             batch_id: batch.id,
             row_number: row.row_number,
-            role: normalizedRole || null,
+            role: resolvedRole,
             email: normalizedEmail || null,
             class_code: normalizedClassCode || null,
             status: 'FAILED',
@@ -1700,8 +1650,14 @@ export class SemesterService {
         );
       };
 
-      if (!['LECTURER', 'STUDENT'].includes(normalizedRole)) {
-        fail('Role must be either LECTURER or STUDENT.');
+      if (normalizedRole === Role.LECTURER) {
+        fail(
+          'Lecturer rows are no longer supported in semester import. Use Teaching Assignments to map lecturers to classes.',
+        );
+        continue;
+      }
+      if (normalizedRole && normalizedRole !== Role.STUDENT) {
+        fail('Role must be STUDENT when provided.');
         continue;
       }
       if (
@@ -1725,95 +1681,12 @@ export class SemesterService {
         fail('Invalid email format.');
         continue;
       }
-      if (normalizedRole === 'STUDENT' && !row.student_id.trim()) {
-        fail('student_id is required for STUDENT rows.');
+      if (!row.student_id.trim()) {
+        fail('student_id is required for student import rows.');
         continue;
       }
 
       try {
-        if (normalizedRole === 'LECTURER') {
-          const existingClass =
-            existingClasses.get(`${semester.code}:${normalizedClassCode}`) ||
-            createdClasses.get(`${semester.code}:${normalizedClassCode}`);
-
-          const { user, created } = await ensureLecturerUser({
-            ...row,
-            role: normalizedRole,
-            email: normalizedEmail,
-            class_code: normalizedClassCode,
-            class_name: normalizedClassName,
-          });
-
-          if (created) {
-            markCounter('lecturers', 'created', normalizedEmail);
-          } else {
-            markCounter('lecturers', 'updated', normalizedEmail);
-          }
-
-          if (!existingClass) {
-            await ensureClassForCode(normalizedClassCode);
-          } else if (
-            mode === 'IMPORT' &&
-            (existingClass.name !== normalizedClassName ||
-              existingClass.lecturer_id !== user?.id)
-          ) {
-            await this.classRepository.update(
-              { id: existingClass.id },
-              { name: normalizedClassName, lecturer_id: user!.id },
-            );
-            markCounter(
-              'classes',
-              'updated',
-              `${semester.code}:${normalizedClassCode}`,
-            );
-            await this.upsertTeachingAssignment(
-              semester.id,
-              existingClass.id,
-              user!.id,
-              uploadedById,
-            );
-          } else if (existingClass) {
-            markCounter(
-              'classes',
-              'updated',
-              `${semester.code}:${normalizedClassCode}`,
-            );
-            if (mode === 'IMPORT' && user?.id) {
-              await this.upsertTeachingAssignment(
-                semester.id,
-                existingClass.id,
-                user.id,
-                uploadedById,
-              );
-            }
-          }
-
-          summary.rows.success += 1;
-          rowLogs.push(
-            this.importRowLogRepository.create({
-              batch_id: batch.id,
-              row_number: row.row_number,
-              role: normalizedRole,
-              email: normalizedEmail,
-              class_code: normalizedClassCode,
-              status: 'SUCCESS',
-              message: existingClass
-                ? 'Lecturer/class mapping validated.'
-                : 'Lecturer/class provisioning prepared.',
-              payload: logPayload,
-            }),
-          );
-          continue;
-        }
-
-        const targetClass = await ensureClassForCode(normalizedClassCode);
-        if (!targetClass) {
-          fail(
-            'Class is not provisioned in the selected semester and no lecturer row was provided for this class.',
-          );
-          continue;
-        }
-
         let student = existingUsers.get(normalizedEmail);
         let createdStudent = false;
 
@@ -1850,6 +1723,11 @@ export class SemesterService {
           markCounter('students', 'updated', normalizedEmail);
         }
 
+        const targetClass = await ensureClassForCode(
+          normalizedClassCode,
+          normalizedClassName,
+        );
+
         if (mode === 'IMPORT') {
           const existingMembership =
             await this.classMembershipRepository.findOne({
@@ -1867,7 +1745,7 @@ export class SemesterService {
               this.importRowLogRepository.create({
                 batch_id: batch.id,
                 row_number: row.row_number,
-                role: normalizedRole,
+                role: resolvedRole,
                 email: normalizedEmail,
                 class_code: normalizedClassCode,
                 status: 'SKIPPED',
@@ -1896,7 +1774,7 @@ export class SemesterService {
           this.importRowLogRepository.create({
             batch_id: batch.id,
             row_number: row.row_number,
-            role: normalizedRole,
+            role: resolvedRole,
             email: normalizedEmail,
             class_code: normalizedClassCode,
             status: 'SUCCESS',

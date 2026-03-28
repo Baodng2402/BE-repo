@@ -28,12 +28,12 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { BulkExaminerAssignmentDto } from './dto/bulk-examiner-assignment.dto';
 import { BulkTeachingAssignmentDto } from './dto/bulk-teaching-assignment.dto';
-import { CreateSemesterDto } from './dto/create-semester.dto';
 import { CreateSemesterLecturerDto } from './dto/create-semester-lecturer.dto';
 import { CreateSemesterStudentDto } from './dto/create-semester-student.dto';
-import { UpdateSemesterDto } from './dto/update-semester.dto';
+import { CreateSemesterDto } from './dto/create-semester.dto';
 import { UpdateSemesterLecturerDto } from './dto/update-semester-lecturer.dto';
 import { UpdateSemesterStudentDto } from './dto/update-semester-student.dto';
+import { UpdateSemesterDto } from './dto/update-semester.dto';
 import { SemesterService } from './semester.service';
 import { parseSemesterImportFile } from './utils/semester-import.util';
 
@@ -73,13 +73,17 @@ export class SemesterController {
   }
 
   @Get(':id/roster')
-  @ApiOperation({ summary: 'Get lecturer, student, and class roster for a semester' })
+  @ApiOperation({
+    summary: 'Get lecturer, student, and class roster for a semester',
+  })
   async getSemesterRoster(@Param('id', ParseUUIDPipe) id: string) {
     return this.semesterService.getSemesterRoster(id);
   }
 
   @Post(':id/roster/lecturers')
-  @ApiOperation({ summary: 'Create lecturer account for semester roster management' })
+  @ApiOperation({
+    summary: 'Create lecturer account for semester roster management',
+  })
   async createSemesterLecturer(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CreateSemesterLecturerDto,
@@ -98,7 +102,10 @@ export class SemesterController {
   }
 
   @Patch(':id/roster/students/:userId')
-  @ApiOperation({ summary: 'Update student account or move class membership within a semester' })
+  @ApiOperation({
+    summary:
+      'Update student account or move class membership within a semester',
+  })
   async updateSemesterStudent(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('userId', ParseUUIDPipe) userId: string,
@@ -108,7 +115,9 @@ export class SemesterController {
   }
 
   @Post(':id/roster/students')
-  @ApiOperation({ summary: 'Create student account and enroll into a semester class' })
+  @ApiOperation({
+    summary: 'Create student account and enroll into a semester class',
+  })
   async createSemesterStudent(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CreateSemesterStudentDto,
@@ -137,7 +146,9 @@ export class SemesterController {
   }
 
   @Patch(':id/examiner-assignments')
-  @ApiOperation({ summary: 'Replace examiner assignments for semester classes' })
+  @ApiOperation({
+    summary: 'Replace examiner assignments for semester classes',
+  })
   async bulkAssignExaminers(
     @Param('id', ParseUUIDPipe) id: string,
     @Req() req: AuthorizedRequest,
@@ -165,7 +176,7 @@ export class SemesterController {
   }
 
   @Post(':id/import')
-  @ApiOperation({ summary: 'Validate or import lecturer + student Excel/XLSX' })
+  @ApiOperation({ summary: 'Validate or import student roster Excel/XLSX' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(
     FileInterceptor('file', {

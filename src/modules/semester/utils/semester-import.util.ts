@@ -4,7 +4,7 @@ import { Workbook } from 'exceljs';
 export interface SemesterImportRow {
   row_number: number;
   semester_code: string;
-  role: string;
+  role?: string;
   email: string;
   full_name: string;
   class_code: string;
@@ -19,11 +19,11 @@ const XLSX_MIME_TYPES = new Set([
 
 const REQUIRED_HEADERS = [
   'semester_code',
-  'role',
   'email',
   'full_name',
   'class_code',
   'class_name',
+  'student_id',
 ];
 
 export async function parseSemesterImportFile(
@@ -64,8 +64,11 @@ export async function parseSemesterImportFile(
   sheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return;
 
-    const read = (header: string) =>
-      (row.getCell(headerIndex.get(header) || 0).value || '').toString().trim();
+    const read = (header: string) => {
+      const index = headerIndex.get(header);
+      if (!index) return '';
+      return (row.getCell(index).value || '').toString().trim();
+    };
 
     const email = read('email');
     const semesterCode = read('semester_code');
@@ -78,7 +81,6 @@ export async function parseSemesterImportFile(
     if (
       !semesterCode &&
       !email &&
-      !role &&
       !fullName &&
       !classCode &&
       !className &&
@@ -90,7 +92,7 @@ export async function parseSemesterImportFile(
     rows.push({
       row_number: rowNumber,
       semester_code: semesterCode,
-      role,
+      role: role || undefined,
       email,
       full_name: fullName,
       class_code: classCode,
