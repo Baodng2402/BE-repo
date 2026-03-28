@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, IsNull, Repository } from 'typeorm';
 import {
   Evaluation,
   EvaluationContribution,
@@ -80,7 +80,7 @@ export class EvaluationService {
         where: {
           group_id: dto.group_id,
           user_id: userId,
-          left_at: undefined,
+          left_at: IsNull(),
         },
       });
       if (!membership) {
@@ -133,7 +133,7 @@ export class EvaluationService {
         where: {
           group_id: evaluation.group_id,
           user_id: userId,
-          left_at: undefined,
+          left_at: IsNull(),
         },
       });
       if (!membership) {
@@ -242,7 +242,7 @@ export class EvaluationService {
 
   private async getActiveMembers(groupId: string): Promise<string[]> {
     const memberships = await this.membershipRepo.find({
-      where: { group_id: groupId, left_at: undefined },
+      where: { group_id: groupId, left_at: IsNull() },
     });
     return memberships.map((m) => m.user_id);
   }
@@ -291,7 +291,7 @@ export class EvaluationService {
     }
 
     const membership = await this.membershipRepo.findOne({
-      where: { group_id: groupId, user_id: userId, left_at: undefined },
+      where: { group_id: groupId, user_id: userId, left_at: IsNull() },
     });
 
     if (!membership) {
