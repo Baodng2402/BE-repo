@@ -61,6 +61,8 @@ services:
       REDIS_HOST: ${REDIS_HOST}
       REDIS_PORT: ${REDIS_PORT}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
+      ALLOWED_CORS_ORIGINS: ${ALLOWED_CORS_ORIGINS}
+      GROQ_API_KEY: ${GROQ_API_KEY}
     ports:
       - "${PORT}:${PORT}"
     depends_on:
