@@ -358,61 +358,105 @@ export class TasksService {
     return jiraToken?.provider_user_id || null;
   }
 
+  private async resolveSyncUserId(groupId: string, requestingUserId: string): Promise<string | null> {
+    // Use requesting user's token if available
+    const ownToken = await this.integrationTokenRepository.findOne({
+      where: { user_id: requestingUserId, provider: IntegrationProvider.JIRA },
+      select: { access_token: true },
+    });
+    if (ownToken?.access_token) return requestingUserId;
+
+    // Fallback: use leader's token
+    const leaderMembership = await this.membershipRepository.findOne({
+      where: { group_id: groupId, role_in_group: MembershipRole.LEADER, left_at: IsNull() },
+    });
+    if (!leaderMembership) return null;
+
+    const leaderToken = await this.integrationTokenRepository.findOne({
+      where: { user_id: leaderMembership.user_id, provider: IntegrationProvider.JIRA },
+      select: { access_token: true },
+    });
+    return leaderToken?.access_token ? leaderMembership.user_id : null;
+  }
+
   private async syncTaskToJira(userId: string, group: Group, task: Task) {
     if (!group.jira_project_key) {
       return;
     }
 
-    try {
-      let issueKey = task.jira_issue_key || null;
-      let issueId = task.jira_issue_id || null;
+    const syncUserId = await this.resolveSyncUserId(group.id, userId);
+    if (!syncUserId) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'task_jira_sync_skipped',
+          group_id: group.id,
+          task_id: task.id,
+          reason: 'no_jira_token_available',
+        }),
+      );
+      return;
+    }
 
-      if (!issueKey) {
-        const createdIssue = await this.jiraService.createIssue(userId, {
+    // Step 1: create issue if not yet linked — save key immediately
+    let issueKey = task.jira_issue_key || null;
+    let issueId = task.jira_issue_id || null;
+
+    if (!issueKey) {
+      try {
+        const createdIssue = await this.jiraService.createIssue(syncUserId, {
           projectKey: group.jira_project_key,
           summary: task.title,
           description: task.description,
         });
         issueKey = createdIssue.key;
         issueId = createdIssue.id;
-      }
-
-      if (issueKey) {
-        const jiraAssigneeAccountId = await this.getJiraAccountIdByUserId(
-          task.assignee_id,
-        );
-
-        if (jiraAssigneeAccountId) {
-          await this.jiraService.assignIssue(
-            userId,
-            issueKey,
-            jiraAssigneeAccountId,
-          );
-        }
-
-        await this.jiraService.transitionIssue(userId, issueKey, task.status);
-      }
-
-      if (issueKey !== task.jira_issue_key || issueId !== task.jira_issue_id) {
         await this.taskRepository.update(
           { id: task.id },
-          {
-            jira_issue_key: issueKey,
-            jira_issue_id: issueId,
-          },
+          { jira_issue_key: issueKey, jira_issue_id: issueId },
+        );
+      } catch (error: unknown) {
+        this.logger.warn(
+          JSON.stringify({
+            event: 'task_jira_create_failed',
+            group_id: group.id,
+            task_id: task.id,
+            reason: error instanceof Error ? error.message : 'createIssue failed',
+          }),
+        );
+        return;
+      }
+    }
+
+    // Step 2: assign — fail gracefully
+    const jiraAssigneeAccountId = await this.getJiraAccountIdByUserId(task.assignee_id);
+    if (jiraAssigneeAccountId) {
+      try {
+        await this.jiraService.assignIssue(syncUserId, issueKey, jiraAssigneeAccountId);
+      } catch (error: unknown) {
+        this.logger.warn(
+          JSON.stringify({
+            event: 'task_jira_assign_failed',
+            group_id: group.id,
+            task_id: task.id,
+            issue_key: issueKey,
+            reason: error instanceof Error ? error.message : 'assignIssue failed',
+          }),
         );
       }
+    }
+
+    // Step 3: transition — fail gracefully, independent of assign
+    try {
+      await this.jiraService.transitionIssue(syncUserId, issueKey, task.status);
     } catch (error: unknown) {
       this.logger.warn(
         JSON.stringify({
-          event: 'task_jira_sync_failed',
+          event: 'task_jira_transition_failed',
           group_id: group.id,
           task_id: task.id,
-          jira_project_key: group.jira_project_key,
-          reason:
-            error instanceof Error
-              ? error.message
-              : 'Failed to sync internal task to Jira',
+          issue_key: issueKey,
+          status: task.status,
+          reason: error instanceof Error ? error.message : 'transitionIssue failed',
         }),
       );
     }
