@@ -110,7 +110,7 @@ Return only the markdown document. Do not add conversational text around it.`;
     const groqClient = this.getGroqClient();
     const chatCompletion = await groqClient.chat.completions.create({
       messages: [{ role: 'user', content: prompt }],
-      model: 'llama3-70b-8192',
+      model: 'allam-2-7b',
       temperature: 0.5,
     });
 
