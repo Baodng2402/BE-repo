@@ -613,6 +613,27 @@ describe('SemesterService', () => {
     });
   });
 
+  it('maps the final milestone to final score', async () => {
+    semesterRepo.findOne.mockResolvedValueOnce({
+      id: 'semester-1',
+      code: 'SP26',
+      name: 'Spring 2026',
+      status: SemesterStatus.ACTIVE,
+      current_week: 11,
+      start_date: '2026-01-01',
+      end_date: '2026-05-01',
+    });
+
+    const result = await service.getCurrentReviewMilestone();
+
+    expect(result.milestone).toEqual({
+      code: ReviewMilestoneCode.FINAL_SCORE,
+      label: 'Final Score',
+      week_start: 11,
+      week_end: 12,
+    });
+  });
+
   it('upserts a lecturer group review with task and commit snapshot evidence', async () => {
     semesterRepo.findOne.mockResolvedValueOnce({
       id: 'semester-1',
@@ -675,8 +696,65 @@ describe('SemesterService', () => {
       }),
     );
     expect(result.group.review_status).toBe('REVIEWED');
-    expect(result.group.scores.total_score).toBe(24);
+    expect(result.group.scores.total_score).toBe(8);
     expect(result.group.snapshot.repository).toBe('org/repo');
+  });
+
+  it('auto-generates draft scores from snapshot evidence when scores are omitted', async () => {
+    semesterRepo.findOne.mockResolvedValueOnce({
+      id: 'semester-1',
+      code: 'SP26',
+      name: 'Spring 2026',
+      status: SemesterStatus.ACTIVE,
+      current_week: 7,
+      start_date: '2026-01-01',
+      end_date: '2026-05-01',
+    });
+    groupRepo.findOne.mockResolvedValue({
+      id: 'group-1',
+      class_id: 'class-1',
+      name: 'Group 1',
+      project_name: 'Project One',
+      topic: null,
+      class: {
+        id: 'class-1',
+        lecturer_id: 'lecturer-1',
+      },
+    });
+    taskRepo.find.mockResolvedValue([
+      { id: 'task-1', status: 'DONE' },
+      { id: 'task-2', status: 'DONE' },
+      { id: 'task-3', status: 'TODO' },
+    ]);
+    groupRepoLinkRepo.findOne
+      .mockResolvedValueOnce({
+        group_id: 'group-1',
+        repo_owner: 'org',
+        repo_name: 'repo',
+        added_by_id: 'leader-1',
+      })
+      .mockResolvedValueOnce(null);
+    githubService.getRepoCommits.mockResolvedValue([
+      { author: 'alice' },
+      { author: 'alice' },
+      { author: 'bob' },
+      { author: 'charlie' },
+    ]);
+    groupReviewRepo.findOne.mockResolvedValue(null);
+
+    const result = await service.upsertCurrentGroupReview(
+      'group-1',
+      'lecturer-1',
+      Role.LECTURER,
+      {
+        lecturer_note: 'Auto draft from evidence',
+      },
+    );
+
+    expect(result.group.scores.task_progress_score).toBeCloseTo(6.67, 2);
+    expect(result.group.scores.commit_contribution_score).toBe(3.65);
+    expect(result.group.scores.review_milestone_score).toBeCloseTo(5.16, 2);
+    expect(result.group.scores.total_score).toBeCloseTo(5.16, 2);
   });
 
   it('returns lecturer review summary with missing evidence warnings', async () => {
