@@ -858,7 +858,12 @@ export class SemesterService {
         class_id: group.class_id,
         class_code: group.class.code,
         class_name: group.class.name,
-        ...this.serializeReviewGroup(group, reviewMap.get(group.id), milestone, true),
+        ...this.serializeReviewGroup(
+          group,
+          reviewMap.get(group.id),
+          milestone,
+          true,
+        ),
       })),
     };
   }
@@ -1173,10 +1178,7 @@ export class SemesterService {
     };
   }
 
-  async createSemesterClass(
-    semesterId: string,
-    dto: CreateSemesterClassDto,
-  ) {
+  async createSemesterClass(semesterId: string, dto: CreateSemesterClassDto) {
     const semester = await this.getSemesterOrThrow(semesterId);
     this.assertSemesterRosterEditable(semester);
 
@@ -1214,7 +1216,10 @@ export class SemesterService {
   ) {
     const semester = await this.getSemesterOrThrow(semesterId);
     this.assertSemesterRosterEditable(semester);
-    const targetClass = await this.getSemesterClassOrThrow(semester.code, classId);
+    const targetClass = await this.getSemesterClassOrThrow(
+      semester.code,
+      classId,
+    );
 
     if (dto.code?.trim()) {
       const nextCode = dto.code.trim().toUpperCase();
@@ -1248,25 +1253,41 @@ export class SemesterService {
       relations: ['lecturer'],
     });
 
-    return this.buildSemesterClassRow(saved, teachingAssignment, examinerAssignments);
+    return this.buildSemesterClassRow(
+      saved,
+      teachingAssignment,
+      examinerAssignments,
+    );
   }
 
   async deleteSemesterClass(semesterId: string, classId: string) {
     const semester = await this.getSemesterOrThrow(semesterId);
     this.assertSemesterRosterEditable(semester);
-    const targetClass = await this.getSemesterClassOrThrow(semester.code, classId);
+    const targetClass = await this.getSemesterClassOrThrow(
+      semester.code,
+      classId,
+    );
 
     const [studentCount, groupCount, teachingAssignment, examinerCount] =
       await Promise.all([
-        this.classMembershipRepository.count({ where: { class_id: targetClass.id } }),
+        this.classMembershipRepository.count({
+          where: { class_id: targetClass.id },
+        }),
         this.groupRepository.count({ where: { class_id: targetClass.id } }),
-        this.teachingAssignmentRepository.findOne({ where: { class_id: targetClass.id } }),
+        this.teachingAssignmentRepository.findOne({
+          where: { class_id: targetClass.id },
+        }),
         this.examinerAssignmentRepository.count({
           where: { semester_id: semester.id, class_id: targetClass.id },
         }),
       ]);
 
-    if (studentCount > 0 || groupCount > 0 || teachingAssignment || examinerCount > 0) {
+    if (
+      studentCount > 0 ||
+      groupCount > 0 ||
+      teachingAssignment ||
+      examinerCount > 0
+    ) {
       throw this.buildConflict(
         'CLASS_DELETE_CONFLICT',
         'Class cannot be deleted while it still has students, groups, or assignments.',
@@ -1281,6 +1302,87 @@ export class SemesterService {
 
     await this.classRepository.delete({ id: targetClass.id });
     return { success: true };
+  }
+
+  async generateSemesterClassGroups(
+    semesterId: string,
+    classId: string,
+    actorUserId: string,
+    groupCount?: number,
+  ) {
+    const semester = await this.getSemesterOrThrow(semesterId);
+    this.assertSemesterRosterEditable(semester);
+    const targetClass = await this.getSemesterClassOrThrow(
+      semester.code,
+      classId,
+    );
+
+    const desiredTotal = groupCount ?? targetClass.max_groups ?? 7;
+    const existingGroups = await this.groupRepository.find({
+      where: { class_id: targetClass.id },
+      order: { created_at: 'ASC' },
+    });
+
+    const existingCount = existingGroups.length;
+    if (existingCount >= desiredTotal) {
+      return {
+        class_id: targetClass.id,
+        class_code: targetClass.code,
+        desired_group_count: desiredTotal,
+        existing_group_count: existingCount,
+        created_group_count: 0,
+      };
+    }
+
+    const existingNames = new Set(
+      existingGroups.map((group) => group.name.trim().toLowerCase()),
+    );
+    const creatorId =
+      targetClass.lecturer_id || (await this.getOrCreateSeedLecturerId());
+    const groupsToCreate: Group[] = [];
+
+    let sequence = 1;
+    while (existingCount + groupsToCreate.length < desiredTotal) {
+      const candidateName = `Group ${sequence}`;
+      sequence += 1;
+
+      if (existingNames.has(candidateName.toLowerCase())) {
+        continue;
+      }
+
+      existingNames.add(candidateName.toLowerCase());
+      groupsToCreate.push(
+        this.groupRepository.create({
+          name: candidateName,
+          class_id: targetClass.id,
+          semester: semester.code,
+          created_by_id: creatorId,
+        }),
+      );
+    }
+
+    await this.groupRepository.save(groupsToCreate);
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'semester_class_groups_generated',
+        semester_id: semester.id,
+        class_id: targetClass.id,
+        class_code: targetClass.code,
+        desired_group_count: desiredTotal,
+        existing_group_count: existingCount,
+        created_group_count: groupsToCreate.length,
+        actor_user_id: actorUserId,
+      }),
+    );
+
+    return {
+      class_id: targetClass.id,
+      class_code: targetClass.code,
+      desired_group_count: desiredTotal,
+      existing_group_count: existingCount,
+      created_group_count: groupsToCreate.length,
+    };
   }
 
   async createSemesterLecturer(
