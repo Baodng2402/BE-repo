@@ -71,7 +71,7 @@ describe('TasksService', () => {
     integrationTokenRepo = createMockRepository();
     jest.clearAllMocks();
 
-    taskRepo.save.mockImplementation(async (entity) => ({
+    taskRepo.save.mockImplementation((entity) => ({
       id: entity.id ?? taskId,
       created_at: entity.created_at ?? new Date('2026-03-20T10:00:00.000Z'),
       updated_at: new Date('2026-03-20T10:00:00.000Z'),
@@ -746,7 +746,9 @@ describe('TasksService', () => {
         role_in_group: MembershipRole.MEMBER,
         left_at: null,
       });
-    integrationTokenRepo.findOne.mockResolvedValue({ provider_user_id: 'jira-member-1' });
+    integrationTokenRepo.findOne.mockResolvedValue({
+      provider_user_id: 'jira-member-1',
+    });
     jiraService.transitionIssue.mockRejectedValue(
       new HttpException(
         {

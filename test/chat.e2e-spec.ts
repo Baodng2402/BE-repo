@@ -1,4 +1,8 @@
-import { CanActivate, ExecutionContext, INestApplication } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  INestApplication,
+} from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -77,7 +81,10 @@ describe('ChatController (e2e)', () => {
 
   it('sends and reads messages through REST endpoints', async () => {
     chatService.createMessage.mockResolvedValue({ id: 'msg-1' });
-    chatService.markConversationRead.mockResolvedValue({ conversation_id: 'conv-1', read_count: 1 });
+    chatService.markConversationRead.mockResolvedValue({
+      conversation_id: 'conv-1',
+      read_count: 1,
+    });
 
     await request(app.getHttpServer())
       .post('/chat/conversations/11111111-1111-1111-1111-111111111111/messages')

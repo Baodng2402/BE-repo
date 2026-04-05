@@ -27,9 +27,7 @@ import { UpsertClassCheckpointsDto } from './dto/upsert-class-checkpoints.dto';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth()
 export class ClassCheckpointController {
-  constructor(
-    private readonly checkpointService: ClassCheckpointService,
-  ) {}
+  constructor(private readonly checkpointService: ClassCheckpointService) {}
 
   @Get(':classId/checkpoints')
   @Roles(Role.LECTURER, Role.ADMIN)

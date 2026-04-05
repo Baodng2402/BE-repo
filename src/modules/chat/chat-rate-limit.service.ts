@@ -19,9 +19,9 @@ export class ChatRateLimitService {
     const now = Date.now();
     const key = `chat-send:${userId}`;
     const existing =
-      ChatRateLimitService.hits.get(key)?.filter(
-        (timestamp) => now - timestamp < WINDOW_MS,
-      ) || [];
+      ChatRateLimitService.hits
+        .get(key)
+        ?.filter((timestamp) => now - timestamp < WINDOW_MS) || [];
 
     if (existing.length >= MAX_MESSAGES) {
       this.logger.warn(
@@ -30,11 +30,14 @@ export class ChatRateLimitService {
           actor_user_id: userId,
         }),
       );
-      throw new HttpException({
-        code: 'CHAT_RATE_LIMITED',
-        message: ERROR_MESSAGES.CHAT.RATE_LIMITED,
-        statusCode: 429,
-      }, 429);
+      throw new HttpException(
+        {
+          code: 'CHAT_RATE_LIMITED',
+          message: ERROR_MESSAGES.CHAT.RATE_LIMITED,
+          statusCode: 429,
+        },
+        429,
+      );
     }
 
     existing.push(now);

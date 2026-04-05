@@ -61,10 +61,7 @@ export class ClassCheckpointService {
     this.assertCanManageCheckpoints(cls, userId, userRole);
 
     const semester = await this.getActiveSemester();
-    const checkpoints = await this.ensureCheckpointsExist(
-      classId,
-      semester.id,
-    );
+    const checkpoints = await this.ensureCheckpointsExist(classId, semester.id);
 
     return {
       class_id: classId,
@@ -245,7 +242,7 @@ export class ClassCheckpointService {
     userId: string,
     userRole: string,
   ) {
-    if (userRole === Role.ADMIN) return;
+    if (userRole === (Role.ADMIN as string)) return;
     if (cls.lecturer_id !== userId) {
       throw new ForbiddenException(ERROR_MESSAGES.CLASSES.ACCESS_DENIED);
     }
@@ -256,7 +253,9 @@ export class ClassCheckpointService {
       where: { status: SemesterStatus.ACTIVE },
     });
     if (!semester) {
-      throw new NotFoundException(ERROR_MESSAGES.CHECKPOINTS.NO_ACTIVE_SEMESTER);
+      throw new NotFoundException(
+        ERROR_MESSAGES.CHECKPOINTS.NO_ACTIVE_SEMESTER,
+      );
     }
     return semester;
   }

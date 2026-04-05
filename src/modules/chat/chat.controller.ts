@@ -53,7 +53,10 @@ export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
   @Post('conversations')
-  @ApiOperation({ summary: 'Get or create a 1-1 chat conversation within semester/class context' })
+  @ApiOperation({
+    summary:
+      'Get or create a 1-1 chat conversation within semester/class context',
+  })
   @ApiBody({
     type: GetOrCreateConversationDto,
     examples: {
@@ -87,9 +90,16 @@ export class ChatController {
   }
 
   @Get('conversations/:id/messages')
-  @ApiOperation({ summary: 'List chat messages with cursor pagination ordered by created_at DESC' })
+  @ApiOperation({
+    summary:
+      'List chat messages with cursor pagination ordered by created_at DESC',
+  })
   @ApiParam({ name: 'id', description: 'Conversation UUID' })
-  @ApiQuery({ name: 'cursor', required: false, example: '2026-03-27T14:00:00.000Z' })
+  @ApiQuery({
+    name: 'cursor',
+    required: false,
+    example: '2026-03-27T14:00:00.000Z',
+  })
   @ApiQuery({ name: 'limit', required: false, example: 20 })
   @ApiResponse({ status: 200, type: ChatMessageListEntity })
   async listMessages(
@@ -126,7 +136,9 @@ export class ChatController {
   }
 
   @Patch('conversations/:id/read')
-  @ApiOperation({ summary: 'Mark all unread messages in the conversation as read' })
+  @ApiOperation({
+    summary: 'Mark all unread messages in the conversation as read',
+  })
   @ApiResponse({ status: 200, type: ChatReadReceiptEntity })
   async markConversationRead(
     @Req() req: AuthorizedRequest,
@@ -137,7 +149,10 @@ export class ChatController {
 
   @Patch('messages/:id/read')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Backward-compatible read endpoint that marks up to a message as read' })
+  @ApiOperation({
+    summary:
+      'Backward-compatible read endpoint that marks up to a message as read',
+  })
   @ApiResponse({ status: 200, type: ChatReadReceiptEntity })
   async markMessageRead(
     @Req() req: AuthorizedRequest,

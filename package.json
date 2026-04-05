@@ -22,7 +22,8 @@
     "typeorm:migration:generate": "npm run typeorm -- migration:generate src/database/migrations/$npm_config_name",
     "typeorm:migration:run": "npm run typeorm -- migration:run",
     "typeorm:migration:revert": "npm run typeorm -- migration:revert",
-    "typeorm:schema:log": "npm run typeorm -- schema:log"
+    "typeorm:schema:log": "npm run typeorm -- schema:log",
+    "prepare": "node -e \"try{require('husky')()}catch(e){}\""
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.1",
@@ -82,7 +83,9 @@
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
     "globals": "^16.0.0",
+    "husky": "^9.1.7",
     "jest": "^30.0.0",
+    "lint-staged": "^16.4.0",
     "prettier": "^3.4.2",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
@@ -109,5 +112,11 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "lint-staged": {
+    "*.ts": [
+      "prettier --write",
+      "eslint --fix"
+    ]
   }
 }

@@ -13,30 +13,42 @@ describe('ChatGateway', () => {
   let lecturerClient: ClientSocket;
 
   const chatService = {
-    listConversationIdsForUser: jest.fn(async () => ['conv-1']),
-    createMessage: jest.fn(async (userId: string, conversationId: string, dto: any) => ({
-      id: `msg-${userId}`,
-      conversation_id: conversationId,
-      sender_id: userId,
-      content: dto.content,
-      created_at: '2026-03-27T10:00:00.000Z',
-      client_id: dto.client_id || null,
-    })),
-    markConversationRead: jest.fn(async (_userId: string, conversationId: string) => ({
-      conversation_id: conversationId,
-      read_count: 1,
-      read_at: '2026-03-27T10:01:00.000Z',
-    })),
-    assertRealtimeAccess: jest.fn(async () => ({ id: 'conv-1' })),
+    listConversationIdsForUser: jest.fn(() => Promise.resolve(['conv-1'])),
+    createMessage: jest.fn((userId: string, conversationId: string, dto: any) =>
+      Promise.resolve({
+        id: `msg-${userId}`,
+        conversation_id: conversationId,
+        sender_id: userId,
+        content: dto.content,
+        created_at: '2026-03-27T10:00:00.000Z',
+        client_id: dto.client_id || null,
+      }),
+    ),
+    markConversationRead: jest.fn((_userId: string, conversationId: string) =>
+      Promise.resolve({
+        conversation_id: conversationId,
+        read_count: 1,
+        read_at: '2026-03-27T10:01:00.000Z',
+      }),
+    ),
+    assertRealtimeAccess: jest.fn(() => Promise.resolve({ id: 'conv-1' })),
   };
 
   const authService = {
-    authenticateSocket: jest.fn(async (socket: any) => {
+    authenticateSocket: jest.fn((socket: any) => {
       if (socket.handshake.auth.token === 'student-token') {
-        return { id: 'student-1', role: 'STUDENT', email: 'student@fpt.edu.vn' };
+        return {
+          id: 'student-1',
+          role: 'STUDENT',
+          email: 'student@fpt.edu.vn',
+        };
       }
       if (socket.handshake.auth.token === 'lecturer-token') {
-        return { id: 'lecturer-1', role: 'LECTURER', email: 'lecturer@fpt.edu.vn' };
+        return {
+          id: 'lecturer-1',
+          role: 'LECTURER',
+          email: 'lecturer@fpt.edu.vn',
+        };
       }
       throw new Error('Unauthorized');
     }),
@@ -75,8 +87,12 @@ describe('ChatGateway', () => {
     });
 
     await Promise.all([
-      new Promise<void>((resolve) => studentClient.on('connect', () => resolve())),
-      new Promise<void>((resolve) => lecturerClient.on('connect', () => resolve())),
+      new Promise<void>((resolve) =>
+        studentClient.on('connect', () => resolve()),
+      ),
+      new Promise<void>((resolve) =>
+        lecturerClient.on('connect', () => resolve()),
+      ),
     ]);
 
     const typingPromise = new Promise<any>((resolve) => {

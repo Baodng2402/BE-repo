@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AllowNullLecturerAndAddSemesterClassCrud1761800000000
-  implements MigrationInterface
-{
+export class AllowNullLecturerAndAddSemesterClassCrud1761800000000 implements MigrationInterface {
   name = 'AllowNullLecturerAndAddSemesterClassCrud1761800000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

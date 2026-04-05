@@ -905,11 +905,11 @@ export class JiraService {
         // applyTransition skips silently if the transition is not available from current state,
         // so if the task is already IN_PROGRESS the first step is a no-op.
         const chain: string[] =
-          targetStatus === 'DONE'
-            ? ['IN_PROGRESS', 'DONE']
-            : [targetStatus];
+          targetStatus === 'DONE' ? ['IN_PROGRESS', 'DONE'] : [targetStatus];
 
-        const applyTransition = async (stepStatus: string): Promise<boolean> => {
+        const applyTransition = async (
+          stepStatus: string,
+        ): Promise<boolean> => {
           const res = await lastValueFrom(
             this.httpService.get<JiraTransitionsResponse>(
               `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`,

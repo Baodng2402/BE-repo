@@ -8,12 +8,15 @@ import {
 import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { ChatService } from './chat.service';
-import { ChatSocketAuthService, ChatSocketUser } from './chat-socket-auth.service';
+import {
+  ChatSocketAuthService,
+  ChatSocketUser,
+} from './chat-socket-auth.service';
 import { SendChatMessageDto } from './dto/send-chat-message.dto';
 import { ChatRateLimitService } from './chat-rate-limit.service';
 
 interface ChatSocket extends Socket {
-  data: Socket['data'] & {
+  data: {
     user?: ChatSocketUser;
   };
 }
@@ -71,11 +74,15 @@ export class ChatGateway {
     try {
       const user = this.requireSocketUser(socket);
       this.chatRateLimitService.consume(user.id);
-      const message = await this.chatService.createMessage(user.id, payload.conversation_id, {
-        content: payload.content,
-        type: payload.type,
-        client_id: payload.client_id,
-      });
+      const message = await this.chatService.createMessage(
+        user.id,
+        payload.conversation_id,
+        {
+          content: payload.content,
+          type: payload.type,
+          client_id: payload.client_id,
+        },
+      );
       await socket.join(this.getConversationRoom(payload.conversation_id));
       this.server
         .to(this.getConversationRoom(payload.conversation_id))
@@ -170,7 +177,8 @@ export class ChatGateway {
     }
     return {
       code: 'CHAT_ERROR',
-      message: error instanceof Error ? error.message : 'Chat operation failed.',
+      message:
+        error instanceof Error ? error.message : 'Chat operation failed.',
     };
   }
 }

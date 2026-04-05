@@ -83,15 +83,9 @@ export class User {
   @OneToMany(() => DocumentSubmission, (submission) => submission.submittedBy)
   submissions: DocumentSubmission[];
 
-  @OneToMany(
-    () => TeachingAssignment,
-    (assignment) => assignment.lecturer,
-  )
+  @OneToMany(() => TeachingAssignment, (assignment) => assignment.lecturer)
   teaching_assignments: TeachingAssignment[];
 
-  @OneToMany(
-    () => ExaminerAssignment,
-    (assignment) => assignment.lecturer,
-  )
+  @OneToMany(() => ExaminerAssignment, (assignment) => assignment.lecturer)
   examiner_assignments: ExaminerAssignment[];
 }

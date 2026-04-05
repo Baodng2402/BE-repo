@@ -62,16 +62,10 @@ export class Class {
   @OneToMany(() => ClassMembership, (membership) => membership.class)
   memberships: ClassMembership[];
 
-  @OneToMany(
-    () => TeachingAssignment,
-    (assignment) => assignment.class,
-  )
+  @OneToMany(() => TeachingAssignment, (assignment) => assignment.class)
   teaching_assignments: TeachingAssignment[];
 
-  @OneToMany(
-    () => ExaminerAssignment,
-    (assignment) => assignment.class,
-  )
+  @OneToMany(() => ExaminerAssignment, (assignment) => assignment.class)
   examiner_assignments: ExaminerAssignment[];
 
   @OneToMany(() => Conversation, (conversation) => conversation.class)

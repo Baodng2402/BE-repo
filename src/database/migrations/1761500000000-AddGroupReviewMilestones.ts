@@ -7,9 +7,7 @@ import {
   TableUnique,
 } from 'typeorm';
 
-export class AddGroupReviewMilestones1761500000000
-  implements MigrationInterface
-{
+export class AddGroupReviewMilestones1761500000000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
       DO $$

@@ -489,7 +489,10 @@ export class TasksService {
     return jiraAccountId;
   }
 
-  private async resolveSyncUserId(groupId: string, requestingUserId: string): Promise<string | null> {
+  private async resolveSyncUserId(
+    groupId: string,
+    requestingUserId: string,
+  ): Promise<string | null> {
     // Use requesting user's token if available
     const ownToken = await this.integrationTokenRepository.findOne({
       where: { user_id: requestingUserId, provider: IntegrationProvider.JIRA },
@@ -499,12 +502,19 @@ export class TasksService {
 
     // Fallback: use leader's token
     const leaderMembership = await this.membershipRepository.findOne({
-      where: { group_id: groupId, role_in_group: MembershipRole.LEADER, left_at: IsNull() },
+      where: {
+        group_id: groupId,
+        role_in_group: MembershipRole.LEADER,
+        left_at: IsNull(),
+      },
     });
     if (!leaderMembership) return null;
 
     const leaderToken = await this.integrationTokenRepository.findOne({
-      where: { user_id: leaderMembership.user_id, provider: IntegrationProvider.JIRA },
+      where: {
+        user_id: leaderMembership.user_id,
+        provider: IntegrationProvider.JIRA,
+      },
       select: { access_token: true },
     });
     return leaderToken?.access_token ? leaderMembership.user_id : null;
@@ -579,10 +589,16 @@ export class TasksService {
     }
 
     // Step 2: assign — fail gracefully
-    const jiraAssigneeAccountId = await this.getJiraAccountIdByUserId(task.assignee_id);
+    const jiraAssigneeAccountId = await this.getJiraAccountIdByUserId(
+      task.assignee_id,
+    );
     if (jiraAssigneeAccountId) {
       try {
-        await this.jiraService.assignIssue(syncUserId, issueKey, jiraAssigneeAccountId);
+        await this.jiraService.assignIssue(
+          syncUserId,
+          issueKey,
+          jiraAssigneeAccountId,
+        );
       } catch (error: unknown) {
         const body = this.getIntegrationErrorBody(error);
         this.logger.warn(
@@ -676,7 +692,8 @@ export class TasksService {
     if (!isClaimOrReassign && !isStatusChange) {
       nextTaskState.jira_sync_status =
         previousTaskState.jira_sync_status ?? TaskJiraSyncStatus.SKIPPED;
-      nextTaskState.jira_sync_reason = previousTaskState.jira_sync_reason ?? null;
+      nextTaskState.jira_sync_reason =
+        previousTaskState.jira_sync_reason ?? null;
       return;
     }
 
@@ -732,7 +749,7 @@ export class TasksService {
       try {
         await this.jiraService.assignIssue(
           actorUserId,
-          issueKey as string,
+          issueKey,
           jiraAssigneeAccountId,
         );
       } catch (error) {
@@ -757,7 +774,7 @@ export class TasksService {
       try {
         const transitioned = await this.jiraService.transitionIssue(
           actorUserId,
-          issueKey as string,
+          issueKey,
           nextTaskState.status,
         );
 
@@ -855,7 +872,8 @@ export class TasksService {
       return;
     }
 
-    const jiraAssigneeAccountId = await this.getJiraAccountIdByUserId(assigneeId);
+    const jiraAssigneeAccountId =
+      await this.getJiraAccountIdByUserId(assigneeId);
     if (!jiraAssigneeAccountId) {
       throw new BadRequestException(
         'Assignee must link Jira account before being assigned in a Jira-synced group.',

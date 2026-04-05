@@ -29,7 +29,11 @@ export class Message {
   @Column({ type: 'text' })
   content: string;
 
-  @Column({ type: 'enum', enum: ChatMessageType, default: ChatMessageType.TEXT })
+  @Column({
+    type: 'enum',
+    enum: ChatMessageType,
+    default: ChatMessageType.TEXT,
+  })
   type: ChatMessageType;
 
   @Column({ type: 'varchar', length: 100, nullable: true })

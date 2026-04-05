@@ -698,7 +698,7 @@ export class SemesterService {
         deadline_week: number;
         description: string | null;
       }>;
-      groups: ReturnType<typeof this.serializeReviewGroup>[];
+      groups: Array<ReturnType<SemesterService['serializeReviewGroup']>>;
     }> = [];
     let totalGroupsCount = 0;
     let reviewedGroupsCount = 0;
@@ -2098,13 +2098,13 @@ export class SemesterService {
         );
       };
 
-      if (normalizedRole === Role.LECTURER) {
+      if (normalizedRole === 'LECTURER') {
         fail(
           'Lecturer rows are no longer supported in semester import. Use Teaching Assignments to map lecturers to classes.',
         );
         continue;
       }
-      if (normalizedRole && normalizedRole !== Role.STUDENT) {
+      if (normalizedRole && normalizedRole !== 'STUDENT') {
         fail('Role must be STUDENT when provided.');
         continue;
       }

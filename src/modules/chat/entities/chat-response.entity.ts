@@ -1,5 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ChatConversationStatus, ChatMessageType, Role } from '../../../common/enums';
+import {
+  ChatConversationStatus,
+  ChatMessageType,
+  Role,
+} from '../../../common/enums';
 
 export class ChatMessageEntity {
   @ApiProperty({ example: '550e8400-e29b-41d4-a716-446655440000' })
@@ -60,7 +64,10 @@ export class ChatConversationEntity {
   @ApiProperty({ example: 'lecturer-uuid' })
   lecturer_id: string;
 
-  @ApiProperty({ enum: ChatConversationStatus, example: ChatConversationStatus.ACTIVE })
+  @ApiProperty({
+    enum: ChatConversationStatus,
+    example: ChatConversationStatus.ACTIVE,
+  })
   status: ChatConversationStatus;
 
   @ApiPropertyOptional({ example: 'Hello teacher...', nullable: true })

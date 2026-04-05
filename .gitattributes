@@ -1,0 +1,2 @@
+# Force LF line endings for all text files in the repo
+* text=auto eol=lf

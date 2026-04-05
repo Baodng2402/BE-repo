@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -37,7 +45,8 @@ export class JiraController {
   @ApiParam({ name: 'projectKey', example: 'SCRUM' })
   @ApiResponse({
     status: 200,
-    description: '{ has_access: true } if accessible, { has_access: false } otherwise',
+    description:
+      '{ has_access: true } if accessible, { has_access: false } otherwise',
   })
   async checkProjectAccess(
     @Req() req: AuthorizedRequest,
@@ -54,7 +63,8 @@ export class JiraController {
   @ApiParam({ name: 'projectKey', example: 'SCRUM' })
   @ApiResponse({
     status: 200,
-    description: '{ assignable: true } if user can be assigned issues, { assignable: false } otherwise',
+    description:
+      '{ assignable: true } if user can be assigned issues, { assignable: false } otherwise',
   })
   async checkAssignable(
     @Req() req: AuthorizedRequest,

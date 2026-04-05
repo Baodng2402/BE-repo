@@ -12,7 +12,10 @@ import {
 } from '../../entities';
 import { ChatController } from './chat.controller';
 import { ChatGateway } from './chat.gateway';
-import { ChatRateLimitService, ChatSendRateLimitGuard } from './chat-rate-limit.service';
+import {
+  ChatRateLimitService,
+  ChatSendRateLimitGuard,
+} from './chat-rate-limit.service';
 import { ChatService } from './chat.service';
 import { ChatSocketAuthService } from './chat-socket-auth.service';
 
