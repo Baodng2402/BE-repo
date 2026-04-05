@@ -32,8 +32,9 @@ import { CreateSemesterClassDto } from './dto/create-semester-class.dto';
 import { CreateSemesterLecturerDto } from './dto/create-semester-lecturer.dto';
 import { CreateSemesterStudentDto } from './dto/create-semester-student.dto';
 import { CreateSemesterDto } from './dto/create-semester.dto';
-import { UpdateSemesterLecturerDto } from './dto/update-semester-lecturer.dto';
+import { GenerateSemesterClassGroupsDto } from './dto/generate-semester-class-groups.dto';
 import { UpdateSemesterClassDto } from './dto/update-semester-class.dto';
+import { UpdateSemesterLecturerDto } from './dto/update-semester-lecturer.dto';
 import { UpdateSemesterStudentDto } from './dto/update-semester-student.dto';
 import { UpdateSemesterDto } from './dto/update-semester.dto';
 import { SemesterService } from './semester.service';
@@ -114,6 +115,22 @@ export class SemesterController {
     @Param('classId', ParseUUIDPipe) classId: string,
   ) {
     return this.semesterService.deleteSemesterClass(id, classId);
+  }
+
+  @Post(':id/classes/:classId/generate-groups')
+  @ApiOperation({ summary: 'Generate default groups for a semester class' })
+  async generateSemesterClassGroups(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('classId', ParseUUIDPipe) classId: string,
+    @Req() req: AuthorizedRequest,
+    @Body() dto: GenerateSemesterClassGroupsDto,
+  ) {
+    return this.semesterService.generateSemesterClassGroups(
+      id,
+      classId,
+      req.user.id,
+      dto.group_count,
+    );
   }
 
   @Post(':id/roster/lecturers')

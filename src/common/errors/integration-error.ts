@@ -3,6 +3,10 @@ import { IntegrationProvider } from '../../entities';
 
 export type IntegrationErrorCode =
   | 'ACCOUNT_NOT_LINKED'
+  | 'JIRA_ACCOUNT_NOT_LINKED'
+  | 'JIRA_MEMBERSHIP_REQUIRED'
+  | 'JIRA_ASSIGN_FAILED'
+  | 'JIRA_TRANSITION_FAILED'
   | 'TOKEN_EXPIRED'
   | 'INSUFFICIENT_SCOPE'
   | 'NOT_FOUND'

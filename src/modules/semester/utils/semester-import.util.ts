@@ -25,6 +25,60 @@ const REQUIRED_HEADERS = [
   'student_id',
 ];
 
+function normalizeCellValue(value: unknown, depth = 0): string {
+  if (value === null || value === undefined) return '';
+  if (depth > 4) return '';
+
+  if (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  ) {
+    return String(value).trim();
+  }
+
+  if (Array.isArray(value)) {
+    const joined = value
+      .map((item) => normalizeCellValue(item, depth + 1))
+      .filter(Boolean)
+      .join('')
+      .trim();
+    return joined;
+  }
+
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+
+    const mailto = normalizeCellValue(record.hyperlink, depth + 1);
+    if (mailto.toLowerCase().startsWith('mailto:')) {
+      return mailto.slice('mailto:'.length).trim();
+    }
+
+    const prioritized = ['text', 'result', 'richText', 'value'];
+    for (const key of prioritized) {
+      const extracted = normalizeCellValue(record[key], depth + 1);
+      if (extracted) return extracted;
+    }
+
+    for (const nested of Object.values(record)) {
+      const extracted = normalizeCellValue(nested, depth + 1);
+      if (extracted) return extracted;
+    }
+
+    try {
+      const json = JSON.stringify(record);
+      if (json) {
+        const emailMatch = json.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+        if (emailMatch?.[0]) return emailMatch[0];
+      }
+    } catch {
+      return '';
+    }
+  }
+
+  return '';
+}
+
 export async function parseSemesterImportFile(
   buffer: Buffer,
   mimeType: string,
@@ -66,7 +120,7 @@ export async function parseSemesterImportFile(
     const read = (header: string) => {
       const index = headerIndex.get(header);
       if (!index) return '';
-      return (row.getCell(index).value || '').toString().trim();
+      return normalizeCellValue(row.getCell(index).value);
     };
 
     const email = read('email');

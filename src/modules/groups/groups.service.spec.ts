@@ -51,7 +51,9 @@ const mockOtherUser = {
 const mockClass = {
   id: CLASS_ID,
   lecturer_id: LECTURER_ID,
+  max_groups: 7,
   max_students_per_group: 5,
+  semester: 'HK2-2025',
 };
 
 const mockGroup = {
@@ -105,6 +107,7 @@ function createMockGroupRepository() {
     where: jest.fn().mockReturnThis(),
     orderBy: jest.fn().mockReturnThis(),
     getOne: jest.fn(),
+    getExists: jest.fn(),
     loadRelationCountAndMap: jest.fn().mockReturnThis(),
     innerJoin: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
@@ -116,6 +119,7 @@ function createMockGroupRepository() {
   return {
     create: jest.fn((dto) => dto),
     save: jest.fn(),
+    count: jest.fn(),
     findOne: jest.fn(),
     find: jest.fn(),
     update: jest.fn(),
@@ -244,25 +248,33 @@ describe('GroupsService', () => {
 
   describe('create', () => {
     const dto = {
+      class_id: CLASS_ID,
       name: 'Group Alpha',
       project_name: 'E-Commerce Platform',
       description: 'Building an e-commerce app',
       semester: 'HK2-2025',
     };
 
-    it('should create a group and add creator as LEADER', async () => {
+    it('should create a group for ADMIN with class-scoped validation', async () => {
+      classRepo.findOne.mockResolvedValue(mockClass);
+      groupRepo.count.mockResolvedValue(0);
+      groupRepo._qb.getExists.mockResolvedValue(false);
       groupRepo.save.mockResolvedValue(mockGroup);
-      membershipRepo.save.mockResolvedValue(mockMembership);
       // findOneById via createQueryBuilder
-      groupRepo._qb.getOne.mockResolvedValue(mockGroupWithMembers);
+      groupRepo._qb.getOne.mockResolvedValue({ ...mockGroup, members: [] });
 
-      const result = await service.create(USER_ID, dto);
+      const result = await service.create(USER_ID, Role.ADMIN, dto);
 
+      expect(classRepo.findOne).toHaveBeenCalledWith({
+        where: { id: CLASS_ID },
+      });
+      expect(groupRepo.count).toHaveBeenCalledWith({
+        where: { class_id: CLASS_ID },
+      });
       expect(groupRepo.save).toHaveBeenCalled();
-      expect(membershipRepo.save).toHaveBeenCalled();
+      expect(membershipRepo.save).not.toHaveBeenCalled();
       expect(result.id).toBe(GROUP_ID);
-      expect(result.members).toHaveLength(1);
-      expect(result.members[0].role_in_group).toBe('LEADER');
+      expect(result.members).toHaveLength(0);
     });
   });
 
@@ -480,7 +492,7 @@ describe('GroupsService', () => {
       membershipRepo.delete.mockResolvedValue({ affected: 2 });
       groupRepo.delete.mockResolvedValue({ affected: 1 });
 
-      await service.remove(GROUP_ID);
+      await service.remove(GROUP_ID, USER_ID, Role.ADMIN);
 
       expect(membershipRepo.delete).toHaveBeenCalledWith({
         group_id: GROUP_ID,
@@ -493,7 +505,9 @@ describe('GroupsService', () => {
     it('should throw NotFoundException for non-existent group', async () => {
       groupRepo.findOne.mockResolvedValue(null);
 
-      await expect(service.remove('bad-id')).rejects.toThrow(NotFoundException);
+      await expect(
+        service.remove('bad-id', USER_ID, Role.ADMIN),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 

@@ -29,8 +29,8 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { AddMemberDto } from './dto/add-member.dto';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { QueryGroupsDto } from './dto/query-groups.dto';
-import { UpdateGroupDto } from './dto/update-group.dto';
 import { ReassignMembersDto } from './dto/reassign-members.dto';
+import { UpdateGroupDto } from './dto/update-group.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
 import {
   GroupDetailEntity,
@@ -50,10 +50,14 @@ export class GroupsController {
   // ── Group CRUD ─────────────────────────────────────────
 
   @Post()
-  @ApiOperation({ summary: 'Create a new group (caller becomes leader)' })
+  @ApiOperation({ summary: 'Create a new group (lecturer of class or admin)' })
   @ApiResponse({ status: 201, type: GroupDetailEntity })
   async create(@Req() req: AuthorizedRequest, @Body() dto: CreateGroupDto) {
-    return await this.groupsService.create(req.user.id, dto);
+    return await this.groupsService.create(
+      req.user.id,
+      req.user.role as Role,
+      dto,
+    );
   }
 
   @Get()
@@ -146,10 +150,15 @@ export class GroupsController {
   }
 
   @Patch(':id')
-  @ApiOperation({ summary: 'Update group info (leader or admin only)' })
+  @ApiOperation({
+    summary: 'Update group info (leader, lecturer of class, or admin)',
+  })
   @ApiParam({ name: 'id', description: 'Group UUID' })
   @ApiResponse({ status: 200, type: GroupDetailEntity })
-  @ApiResponse({ status: 403, description: 'Only group leaders can update' })
+  @ApiResponse({
+    status: 403,
+    description: 'Only group leaders, class lecturer, or admin can update',
+  })
   @ApiResponse({ status: 404, description: 'Group not found' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -165,16 +174,17 @@ export class GroupsController {
   }
 
   @Delete(':id')
-  @UseGuards(RolesGuard)
-  @Roles(Role.ADMIN)
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Delete a group (admin only)' })
+  @ApiOperation({ summary: 'Delete a group (lecturer of class or admin)' })
   @ApiParam({ name: 'id', description: 'Group UUID' })
   @ApiResponse({ status: 204, description: 'Group deleted' })
-  @ApiResponse({ status: 403, description: 'Admin access required' })
+  @ApiResponse({ status: 403, description: 'Lecturer/admin access required' })
   @ApiResponse({ status: 404, description: 'Group not found' })
-  async remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.groupsService.remove(id);
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: AuthorizedRequest,
+  ) {
+    return this.groupsService.remove(id, req.user.id, req.user.role as Role);
   }
 
   // ── Member management ──────────────────────────────────

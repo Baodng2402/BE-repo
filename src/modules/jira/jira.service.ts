@@ -65,6 +65,25 @@ interface JiraTransitionsResponse {
   }>;
 }
 
+interface JiraProjectRolesResponse {
+  [roleName: string]: string;
+}
+
+interface JiraProjectRoleActor {
+  type?: string;
+  actorUser?: {
+    accountId?: string;
+  };
+  actorGroup?: {
+    groupId?: string;
+    name?: string;
+  };
+}
+
+interface JiraProjectRoleDetailsResponse {
+  actors?: JiraProjectRoleActor[];
+}
+
 interface JiraCreatedProjectResponse extends Record<string, unknown> {
   id?: string | number;
   projectKey?: string;
@@ -622,6 +641,73 @@ export class JiraService {
     } catch {
       return { has_access: false };
     }
+  }
+
+  async getProjectRoles(userId: string, projectKey: string) {
+    return this.executeWithJiraContext(
+      userId,
+      `Failed to fetch Jira project roles for ${projectKey}.`,
+      async ({ accessToken, cloudId }) => {
+        const response = await lastValueFrom(
+          this.httpService.get<JiraProjectRolesResponse>(
+            `https://api.atlassian.com/ex/jira/${cloudId}/rest/api/3/project/${encodeURIComponent(projectKey)}/role`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: 'application/json',
+              },
+            },
+          ),
+        );
+
+        return response.data || {};
+      },
+    );
+  }
+
+  async getProjectRoleActors(userId: string, roleUrl: string) {
+    return this.executeWithJiraContext(
+      userId,
+      'Failed to fetch Jira project role actors.',
+      async ({ accessToken }) => {
+        const response =
+          await this.httpService.axiosRef.get<JiraProjectRoleDetailsResponse>(
+            roleUrl,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: 'application/json',
+              },
+            },
+          );
+
+        return response.data?.actors || [];
+      },
+    );
+  }
+
+  async isExplicitProjectMember(
+    userId: string,
+    projectKey: string,
+    jiraAccountId: string,
+  ): Promise<boolean> {
+    const roles = await this.getProjectRoles(userId, projectKey);
+    const roleUrls = Object.values(roles).filter(
+      (value): value is string => typeof value === 'string' && value.length > 0,
+    );
+
+    for (const roleUrl of roleUrls) {
+      const actors = await this.getProjectRoleActors(userId, roleUrl);
+      const hasDirectActor = actors.some(
+        (actor) => actor.actorUser?.accountId === jiraAccountId,
+      );
+
+      if (hasDirectActor) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   async isAccountAssignableInProject(

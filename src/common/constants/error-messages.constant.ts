@@ -18,6 +18,10 @@ export const ERROR_MESSAGES = {
   GROUPS: {
     NOT_FOUND: 'Group not found',
     NOT_A_MEMBER: 'You are not a member of this group',
+    CREATE_FORBIDDEN: 'Only lecturers or admins can create groups',
+    NAME_ALREADY_EXISTS_IN_CLASS:
+      'A group with this name already exists in the class',
+    CLASS_MAX_GROUPS_EXCEEDED: 'Class has reached the maximum number of groups',
     USER_NOT_FOUND: 'User not found',
     ALREADY_A_MEMBER: 'User is already a member of this group',
     MEMBER_NOT_FOUND: 'Member not found in this group',

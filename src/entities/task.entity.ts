@@ -9,7 +9,11 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { TaskJiraSyncStatus, TaskPriority, TaskStatus } from '../common/enums';
+import {
+  TaskJiraSyncStatus,
+  TaskPriority,
+  TaskStatus,
+} from '../common/enums';
 import { Group } from './group.entity';
 import { User } from './user.entity';
 

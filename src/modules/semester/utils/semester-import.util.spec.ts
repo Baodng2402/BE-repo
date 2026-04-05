@@ -63,4 +63,38 @@ describe('parseSemesterImportFile', () => {
       ),
     ).rejects.toThrow('Missing required columns');
   });
+
+  it('parses hyperlink email cells without coercing to [object Object]', async () => {
+    const workbook = new Workbook();
+    const sheet = workbook.addWorksheet('Import');
+    sheet.addRow([
+      'semester_code',
+      'email',
+      'full_name',
+      'class_code',
+      'student_id',
+    ]);
+
+    sheet.addRow([
+      'FA27',
+      { text: 'bao5511c@gmail.com', hyperlink: 'mailto:bao5511c@gmail.com' },
+      'Dang Nguyen Gia Bao',
+      'SWP391_G1',
+      'SE190001',
+    ]);
+
+    const buffer = await workbook.xlsx.writeBuffer();
+
+    const result = await parseSemesterImportFile(
+      Buffer.from(buffer),
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      email: 'bao5511c@gmail.com',
+      class_code: 'SWP391_G1',
+      semester_code: 'FA27',
+    });
+  });
 });

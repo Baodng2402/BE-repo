@@ -837,15 +837,33 @@ export class SemesterService {
       week_start: milestone.week_start,
       week_end: milestone.week_end,
       task_progress_score:
-        dto.task_progress_score ?? existingReview?.task_progress_score ?? null,
+        dto.task_progress_score ??
+        existingReview?.task_progress_score ??
+        this.deriveTaskProgressScore(snapshot.task_done, snapshot.task_total),
       commit_contribution_score:
         dto.commit_contribution_score ??
         existingReview?.commit_contribution_score ??
-        null,
+        this.deriveCommitContributionScore(
+          snapshot.commit_total,
+          snapshot.commit_contributors,
+        ),
       review_milestone_score:
         dto.review_milestone_score ??
         existingReview?.review_milestone_score ??
-        null,
+        this.deriveReviewMilestoneScore(
+          dto.task_progress_score ??
+            existingReview?.task_progress_score ??
+            this.deriveTaskProgressScore(
+              snapshot.task_done,
+              snapshot.task_total,
+            ),
+          dto.commit_contribution_score ??
+            existingReview?.commit_contribution_score ??
+            this.deriveCommitContributionScore(
+              snapshot.commit_total,
+              snapshot.commit_contributors,
+            ),
+        ),
       lecturer_note: dto.lecturer_note ?? existingReview?.lecturer_note ?? null,
       snapshot_task_total: snapshot.task_total,
       snapshot_task_done: snapshot.task_done,
@@ -926,15 +944,10 @@ export class SemesterService {
         ...this.serializeReviewGroup(
           group,
           reviewMap.get(group.id),
-          classMilestone,
+          milestone,
           true,
         ),
-      });
-    }
-
-    return {
-      semester: this.serializeSemester(semester),
-      groups: groupResults,
+      })),
     };
   }
 
@@ -1076,10 +1089,11 @@ export class SemesterService {
 
       const group = currentGroups.find((g) => g.id === review.group_id);
       if (group) {
-        const totalScore =
-          (Number(review.task_progress_score ?? 0) || 0) +
-          (Number(review.commit_contribution_score ?? 0) || 0) +
-          (Number(review.review_milestone_score ?? 0) || 0);
+        const totalScore = this.computeAverageScore(
+          review.task_progress_score,
+          review.commit_contribution_score,
+          review.review_milestone_score,
+        );
 
         milestoneMap.get(key)!.groups.push({
           group_id: group.id,
@@ -1089,7 +1103,7 @@ export class SemesterService {
             task_progress_score: review.task_progress_score,
             commit_contribution_score: review.commit_contribution_score,
             review_milestone_score: review.review_milestone_score,
-            total_score: Number(totalScore.toFixed(2)),
+            total_score: totalScore,
           },
           lecturer_note: review.lecturer_note,
         });
@@ -1106,9 +1120,10 @@ export class SemesterService {
     const labels: Record<string, string> = {
       REVIEW_1: 'Checkpoint 1',
       PROGRESS_TRACKING: 'Progress Tracking',
-      REVIEW_2: 'Checkpoint 2',
-      REVIEW_3: 'Checkpoint 3',
-      FINAL_PRESENTATION: 'Final Presentation',
+      REVIEW_2: 'Review 2',
+      REVIEW_3: 'Review 3',
+      FINAL_SCORE: 'Final Score',
+      FINAL_PRESENTATION: 'Final Score',
     };
     return labels[code] || code;
   }
@@ -1281,10 +1296,7 @@ export class SemesterService {
     };
   }
 
-  async createSemesterClass(
-    semesterId: string,
-    dto: CreateSemesterClassDto,
-  ) {
+  async createSemesterClass(semesterId: string, dto: CreateSemesterClassDto) {
     const semester = await this.getSemesterOrThrow(semesterId);
     this.assertSemesterRosterEditable(semester);
 
@@ -1322,7 +1334,10 @@ export class SemesterService {
   ) {
     const semester = await this.getSemesterOrThrow(semesterId);
     this.assertSemesterRosterEditable(semester);
-    const targetClass = await this.getSemesterClassOrThrow(semester.code, classId);
+    const targetClass = await this.getSemesterClassOrThrow(
+      semester.code,
+      classId,
+    );
 
     if (dto.code?.trim()) {
       const nextCode = dto.code.trim().toUpperCase();
@@ -1356,25 +1371,41 @@ export class SemesterService {
       relations: ['lecturer'],
     });
 
-    return this.buildSemesterClassRow(saved, teachingAssignment, examinerAssignments);
+    return this.buildSemesterClassRow(
+      saved,
+      teachingAssignment,
+      examinerAssignments,
+    );
   }
 
   async deleteSemesterClass(semesterId: string, classId: string) {
     const semester = await this.getSemesterOrThrow(semesterId);
     this.assertSemesterRosterEditable(semester);
-    const targetClass = await this.getSemesterClassOrThrow(semester.code, classId);
+    const targetClass = await this.getSemesterClassOrThrow(
+      semester.code,
+      classId,
+    );
 
     const [studentCount, groupCount, teachingAssignment, examinerCount] =
       await Promise.all([
-        this.classMembershipRepository.count({ where: { class_id: targetClass.id } }),
+        this.classMembershipRepository.count({
+          where: { class_id: targetClass.id },
+        }),
         this.groupRepository.count({ where: { class_id: targetClass.id } }),
-        this.teachingAssignmentRepository.findOne({ where: { class_id: targetClass.id } }),
+        this.teachingAssignmentRepository.findOne({
+          where: { class_id: targetClass.id },
+        }),
         this.examinerAssignmentRepository.count({
           where: { semester_id: semester.id, class_id: targetClass.id },
         }),
       ]);
 
-    if (studentCount > 0 || groupCount > 0 || teachingAssignment || examinerCount > 0) {
+    if (
+      studentCount > 0 ||
+      groupCount > 0 ||
+      teachingAssignment ||
+      examinerCount > 0
+    ) {
       throw this.buildConflict(
         'CLASS_DELETE_CONFLICT',
         'Class cannot be deleted while it still has students, groups, or assignments.',
@@ -1389,6 +1420,87 @@ export class SemesterService {
 
     await this.classRepository.delete({ id: targetClass.id });
     return { success: true };
+  }
+
+  async generateSemesterClassGroups(
+    semesterId: string,
+    classId: string,
+    actorUserId: string,
+    groupCount?: number,
+  ) {
+    const semester = await this.getSemesterOrThrow(semesterId);
+    this.assertSemesterRosterEditable(semester);
+    const targetClass = await this.getSemesterClassOrThrow(
+      semester.code,
+      classId,
+    );
+
+    const desiredTotal = groupCount ?? targetClass.max_groups ?? 7;
+    const existingGroups = await this.groupRepository.find({
+      where: { class_id: targetClass.id },
+      order: { created_at: 'ASC' },
+    });
+
+    const existingCount = existingGroups.length;
+    if (existingCount >= desiredTotal) {
+      return {
+        class_id: targetClass.id,
+        class_code: targetClass.code,
+        desired_group_count: desiredTotal,
+        existing_group_count: existingCount,
+        created_group_count: 0,
+      };
+    }
+
+    const existingNames = new Set(
+      existingGroups.map((group) => group.name.trim().toLowerCase()),
+    );
+    const creatorId =
+      targetClass.lecturer_id || (await this.getOrCreateSeedLecturerId());
+    const groupsToCreate: Group[] = [];
+
+    let sequence = 1;
+    while (existingCount + groupsToCreate.length < desiredTotal) {
+      const candidateName = `Group ${sequence}`;
+      sequence += 1;
+
+      if (existingNames.has(candidateName.toLowerCase())) {
+        continue;
+      }
+
+      existingNames.add(candidateName.toLowerCase());
+      groupsToCreate.push(
+        this.groupRepository.create({
+          name: candidateName,
+          class_id: targetClass.id,
+          semester: semester.code,
+          created_by_id: creatorId,
+        }),
+      );
+    }
+
+    await this.groupRepository.save(groupsToCreate);
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'semester_class_groups_generated',
+        semester_id: semester.id,
+        class_id: targetClass.id,
+        class_code: targetClass.code,
+        desired_group_count: desiredTotal,
+        existing_group_count: existingCount,
+        created_group_count: groupsToCreate.length,
+        actor_user_id: actorUserId,
+      }),
+    );
+
+    return {
+      class_id: targetClass.id,
+      class_code: targetClass.code,
+      desired_group_count: desiredTotal,
+      existing_group_count: existingCount,
+      created_group_count: groupsToCreate.length,
+    };
   }
 
   async createSemesterLecturer(
@@ -2249,8 +2361,8 @@ export class SemesterService {
     }
     if (currentWeek >= 11) {
       return {
-        code: ReviewMilestoneCode.FINAL_PRESENTATION,
-        label: 'Final Presentation',
+        code: ReviewMilestoneCode.FINAL_SCORE,
+        label: 'Final Score',
         week_start: 11,
         week_end: 12,
       };
@@ -2290,10 +2402,11 @@ export class SemesterService {
     const isPublished = review?.is_published ?? false;
     const showScores = !forStudent || isPublished;
     const reviewStatus: ReviewMilestoneStatus = review ? 'REVIEWED' : 'PENDING';
-    const totalScore =
-      (Number(review?.task_progress_score ?? 0) || 0) +
-      (Number(review?.commit_contribution_score ?? 0) || 0) +
-      (Number(review?.review_milestone_score ?? 0) || 0);
+    const totalScore = this.computeAverageScore(
+      review?.task_progress_score,
+      review?.commit_contribution_score,
+      review?.review_milestone_score,
+    );
 
     return {
       group_id: group.id,
@@ -2307,7 +2420,7 @@ export class SemesterService {
             commit_contribution_score:
               review?.commit_contribution_score ?? null,
             review_milestone_score: review?.review_milestone_score ?? null,
-            total_score: review ? Number(totalScore.toFixed(2)) : null,
+            total_score: review ? totalScore : null,
           }
         : {
             task_progress_score: null,
@@ -2436,6 +2549,62 @@ export class SemesterService {
       repository,
       captured_at: new Date(),
     };
+  }
+
+  private computeAverageScore(
+    taskProgressScore: number | null | undefined,
+    commitContributionScore: number | null | undefined,
+    reviewMilestoneScore: number | null | undefined,
+  ): number | null {
+    const scoreValues = [
+      taskProgressScore,
+      commitContributionScore,
+      reviewMilestoneScore,
+    ].filter((score): score is number => score !== null && score !== undefined);
+
+    if (scoreValues.length === 0) {
+      return null;
+    }
+
+    const average =
+      scoreValues.reduce((sum, score) => sum + Number(score), 0) /
+      scoreValues.length;
+    return Number(average.toFixed(2));
+  }
+
+  private deriveTaskProgressScore(taskDone: number, taskTotal: number): number {
+    if (taskTotal <= 0) {
+      return 0;
+    }
+
+    const ratio = Math.max(0, Math.min(1, taskDone / taskTotal));
+    return Number((ratio * 10).toFixed(2));
+  }
+
+  private deriveCommitContributionScore(
+    commitTotal: number | null,
+    commitContributors: number | null,
+  ): number {
+    if (!commitTotal || commitTotal <= 0) {
+      return 0;
+    }
+
+    const commitVolumeFactor = Math.min(1, commitTotal / 20);
+    const contributorFactor = Math.min(1, (commitContributors ?? 1) / 4);
+    const weightedScore = commitVolumeFactor * 0.7 + contributorFactor * 0.3;
+    return Number((weightedScore * 10).toFixed(2));
+  }
+
+  private deriveReviewMilestoneScore(
+    taskProgressScore: number,
+    commitContributionScore: number,
+  ): number {
+    return Number(
+      (
+        (Number(taskProgressScore) + Number(commitContributionScore)) /
+        2
+      ).toFixed(2),
+    );
   }
 
   private async buildExaminerAssignmentBoard(semester: Semester) {

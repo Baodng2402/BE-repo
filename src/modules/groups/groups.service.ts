@@ -26,8 +26,8 @@ import { JiraService } from '../jira/jira.service';
 import { AddMemberDto } from './dto/add-member.dto';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { QueryGroupsDto } from './dto/query-groups.dto';
-import { UpdateGroupDto } from './dto/update-group.dto';
 import { ReassignMembersDto } from './dto/reassign-members.dto';
+import { UpdateGroupDto } from './dto/update-group.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
 
 @Injectable()
@@ -54,25 +54,57 @@ export class GroupsService {
     private readonly jiraService: JiraService,
   ) {}
 
-  async create(userId: string, dto: CreateGroupDto) {
+  async create(userId: string, userRole: Role, dto: CreateGroupDto) {
+    if (userRole !== Role.ADMIN && userRole !== Role.LECTURER) {
+      throw new ForbiddenException(ERROR_MESSAGES.GROUPS.CREATE_FORBIDDEN);
+    }
+
+    const targetClass = await this.classRepository.findOne({
+      where: { id: dto.class_id },
+    });
+
+    if (!targetClass) {
+      throw new NotFoundException(ERROR_MESSAGES.CLASSES.NOT_FOUND);
+    }
+
+    if (userRole === Role.LECTURER && targetClass.lecturer_id !== userId) {
+      throw new ForbiddenException(ERROR_MESSAGES.GROUPS.NOT_CLASS_LECTURER);
+    }
+
+    const groupsInClass = await this.groupRepository.count({
+      where: { class_id: dto.class_id },
+    });
+
+    if (groupsInClass >= targetClass.max_groups) {
+      throw new BadRequestException(
+        ERROR_MESSAGES.GROUPS.CLASS_MAX_GROUPS_EXCEEDED,
+      );
+    }
+
+    const duplicateName = await this.groupRepository
+      .createQueryBuilder('group')
+      .where('group.class_id = :classId', { classId: dto.class_id })
+      .andWhere('LOWER(group.name) = LOWER(:name)', { name: dto.name })
+      .getExists();
+
+    if (duplicateName) {
+      throw new BadRequestException(
+        ERROR_MESSAGES.GROUPS.NAME_ALREADY_EXISTS_IN_CLASS,
+      );
+    }
+
     const group = this.groupRepository.create({
+      class_id: dto.class_id,
       name: dto.name,
       project_name: dto.project_name,
       description: dto.description,
-      semester: dto.semester,
+      semester: dto.semester ?? targetClass.semester,
       github_repo_url: dto.github_repo_url,
       jira_project_key: dto.jira_project_key,
       created_by_id: userId,
     });
 
     const savedGroup = await this.groupRepository.save(group);
-
-    const membership = this.membershipRepository.create({
-      group_id: savedGroup.id,
-      user_id: userId,
-      role_in_group: MembershipRole.LEADER,
-    });
-    await this.membershipRepository.save(membership);
 
     return this.findOneById(savedGroup.id);
   }
@@ -410,8 +442,21 @@ export class GroupsService {
     return this.formatGroupDetail(updatedGroup);
   }
 
-  async remove(groupId: string) {
-    await this.assertGroupExists(groupId);
+  async remove(groupId: string, userId: string, userRole: Role) {
+    const group = await this.assertGroupExists(groupId);
+
+    if (userRole === Role.LECTURER) {
+      const targetClass = await this.classRepository.findOne({
+        where: { id: group.class_id },
+      });
+      if (!targetClass || targetClass.lecturer_id !== userId) {
+        throw new ForbiddenException(ERROR_MESSAGES.GROUPS.NOT_CLASS_LECTURER);
+      }
+    } else if (userRole !== Role.ADMIN) {
+      throw new ForbiddenException(
+        ERROR_MESSAGES.GROUPS.ONLY_LEADERS_CAN_MANAGE,
+      );
+    }
 
     await this.membershipRepository.delete({ group_id: groupId });
     await this.groupRepository.delete({ id: groupId });
@@ -860,6 +905,18 @@ export class GroupsService {
     userRole: Role,
   ) {
     if (userRole === Role.ADMIN) return;
+
+    if (userRole === Role.LECTURER) {
+      const group = await this.assertGroupExists(groupId);
+      const targetClass = await this.classRepository.findOne({
+        where: { id: group.class_id },
+      });
+
+      if (!targetClass || targetClass.lecturer_id !== userId) {
+        throw new ForbiddenException(ERROR_MESSAGES.GROUPS.NOT_CLASS_LECTURER);
+      }
+      return;
+    }
 
     const membership = await this.membershipRepository.findOne({
       where: { group_id: groupId, user_id: userId },

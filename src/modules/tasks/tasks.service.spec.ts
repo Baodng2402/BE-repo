@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
   NotFoundException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -33,6 +34,7 @@ function createMockRepository() {
 
   return {
     findOne: jest.fn(),
+    update: jest.fn(),
     create: jest.fn((dto) => dto),
     save: jest.fn(),
     createQueryBuilder: jest.fn(() => qb),
@@ -50,6 +52,8 @@ describe('TasksService', () => {
   const jiraService = {
     createIssue: jest.fn(),
     assignIssue: jest.fn(),
+    isAccountAssignableInProject: jest.fn(),
+    isExplicitProjectMember: jest.fn(),
     transitionIssue: jest.fn(),
   };
 
@@ -65,6 +69,7 @@ describe('TasksService', () => {
     membershipRepo = createMockRepository();
     userRepo = createMockRepository();
     integrationTokenRepo = createMockRepository();
+    jest.clearAllMocks();
 
     taskRepo.save.mockImplementation(async (entity) => ({
       id: entity.id ?? taskId,
@@ -72,6 +77,17 @@ describe('TasksService', () => {
       updated_at: new Date('2026-03-20T10:00:00.000Z'),
       ...entity,
     }));
+    taskRepo.update.mockResolvedValue({ affected: 1 });
+    jiraService.createIssue.mockReset();
+    jiraService.assignIssue.mockReset();
+    jiraService.isAccountAssignableInProject.mockReset();
+    jiraService.isExplicitProjectMember.mockReset();
+    jiraService.transitionIssue.mockReset();
+    jiraService.createIssue.mockResolvedValue({ id: '10010', key: 'SWP-10' });
+    jiraService.assignIssue.mockResolvedValue(undefined);
+    jiraService.isAccountAssignableInProject.mockResolvedValue(true);
+    jiraService.isExplicitProjectMember.mockResolvedValue(true);
+    jiraService.transitionIssue.mockResolvedValue(true);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -545,5 +561,311 @@ describe('TasksService', () => {
         title: 'Should not be allowed',
       }),
     ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('rejects claim in Jira-linked group when actor is not explicit Jira project member', async () => {
+    taskRepo.findOne.mockResolvedValue({
+      id: taskId,
+      group_id: groupId,
+      title: 'Claim me',
+      description: null,
+      status: TaskStatus.TODO,
+      priority: TaskPriority.MEDIUM,
+      assignee_id: null,
+      jira_issue_key: 'SWP-11',
+      jira_issue_id: '10011',
+      jira_sync_status: 'SUCCESS',
+      jira_sync_reason: null,
+      due_at: null,
+      deleted_at: null,
+    });
+    groupRepo.findOne.mockResolvedValue({
+      id: groupId,
+      jira_project_key: 'SWP',
+    });
+    membershipRepo.findOne
+      .mockResolvedValueOnce({
+        group_id: groupId,
+        user_id: memberId,
+        role_in_group: MembershipRole.MEMBER,
+        left_at: null,
+      })
+      .mockResolvedValueOnce({
+        group_id: groupId,
+        user_id: memberId,
+        role_in_group: MembershipRole.MEMBER,
+        left_at: null,
+      })
+      .mockResolvedValueOnce({
+        group_id: groupId,
+        user_id: memberId,
+        role_in_group: MembershipRole.MEMBER,
+        left_at: null,
+      });
+    userRepo.findOne.mockResolvedValue({
+      id: memberId,
+      full_name: 'Member A',
+      email: 'member@fpt.edu.vn',
+    });
+    integrationTokenRepo.findOne
+      .mockResolvedValueOnce({ provider_user_id: 'jira-member-1' })
+      .mockResolvedValueOnce({ access_token: 'token' })
+      .mockResolvedValueOnce({ provider_user_id: 'jira-member-1' });
+    jiraService.isExplicitProjectMember.mockResolvedValue(false);
+
+    await expect(
+      service.update(taskId, memberId, Role.STUDENT, {
+        assignee_id: memberId,
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'JIRA_MEMBERSHIP_REQUIRED',
+      }),
+      status: 403,
+    });
+
+    expect(taskRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('returns stable assign error when Jira assignee sync fails', async () => {
+    taskRepo.findOne.mockResolvedValue({
+      id: taskId,
+      group_id: groupId,
+      title: 'Claim me',
+      description: null,
+      status: TaskStatus.TODO,
+      priority: TaskPriority.MEDIUM,
+      assignee_id: null,
+      jira_issue_key: 'SWP-12',
+      jira_issue_id: '10012',
+      jira_sync_status: 'SUCCESS',
+      jira_sync_reason: null,
+      due_at: null,
+      deleted_at: null,
+    });
+    groupRepo.findOne.mockResolvedValue({
+      id: groupId,
+      jira_project_key: 'SWP',
+    });
+    membershipRepo.findOne
+      .mockResolvedValueOnce({
+        group_id: groupId,
+        user_id: leaderId,
+        role_in_group: MembershipRole.LEADER,
+        left_at: null,
+      })
+      .mockResolvedValueOnce({
+        group_id: groupId,
+        user_id: memberId,
+        role_in_group: MembershipRole.MEMBER,
+        left_at: null,
+      })
+      .mockResolvedValueOnce({
+        group_id: groupId,
+        user_id: leaderId,
+        role_in_group: MembershipRole.LEADER,
+        left_at: null,
+      })
+      .mockResolvedValueOnce({
+        group_id: groupId,
+        user_id: leaderId,
+        role_in_group: MembershipRole.LEADER,
+        left_at: null,
+      });
+    userRepo.findOne.mockResolvedValue({
+      id: memberId,
+      full_name: 'Member A',
+      email: 'member@fpt.edu.vn',
+    });
+    integrationTokenRepo.findOne
+      .mockResolvedValueOnce({ provider_user_id: 'jira-member-1' })
+      .mockResolvedValueOnce({ access_token: 'leader-token' })
+      .mockResolvedValueOnce({ provider_user_id: 'jira-leader-1' })
+      .mockResolvedValueOnce({ provider_user_id: 'jira-member-1' });
+    jiraService.assignIssue.mockRejectedValue(
+      new HttpException(
+        {
+          code: 'VALIDATION_ERROR',
+          message: 'Cannot assign issue',
+        },
+        400,
+      ),
+    );
+
+    await expect(
+      service.update(taskId, leaderId, Role.STUDENT, {
+        assignee_id: memberId,
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'JIRA_ASSIGN_FAILED',
+      }),
+      status: 400,
+    });
+
+    expect(taskRepo.update).toHaveBeenCalledWith(
+      { id: taskId },
+      expect.objectContaining({
+        jira_sync_status: 'FAILED',
+        jira_sync_reason: 'JIRA_ASSIGN_FAILED',
+      }),
+    );
+    expect(taskRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('returns stable transition error when Jira status sync fails', async () => {
+    taskRepo.findOne.mockResolvedValue({
+      id: taskId,
+      group_id: groupId,
+      title: 'Own task',
+      description: null,
+      status: TaskStatus.IN_PROGRESS,
+      priority: TaskPriority.MEDIUM,
+      assignee_id: memberId,
+      jira_issue_key: 'SWP-13',
+      jira_issue_id: '10013',
+      jira_sync_status: 'SUCCESS',
+      jira_sync_reason: null,
+      due_at: null,
+      deleted_at: null,
+    });
+    groupRepo.findOne.mockResolvedValue({
+      id: groupId,
+      jira_project_key: 'SWP',
+    });
+    membershipRepo.findOne
+      .mockResolvedValueOnce({
+        group_id: groupId,
+        user_id: memberId,
+        role_in_group: MembershipRole.MEMBER,
+        left_at: null,
+      })
+      .mockResolvedValueOnce({
+        group_id: groupId,
+        user_id: memberId,
+        role_in_group: MembershipRole.MEMBER,
+        left_at: null,
+      });
+    integrationTokenRepo.findOne.mockResolvedValue({ provider_user_id: 'jira-member-1' });
+    jiraService.transitionIssue.mockRejectedValue(
+      new HttpException(
+        {
+          code: 'VALIDATION_ERROR',
+          message: 'Cannot transition issue',
+        },
+        400,
+      ),
+    );
+
+    await expect(
+      service.update(taskId, memberId, Role.STUDENT, {
+        status: TaskStatus.DONE,
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'JIRA_TRANSITION_FAILED',
+      }),
+      status: 400,
+    });
+
+    expect(taskRepo.update).toHaveBeenCalledWith(
+      { id: taskId },
+      expect.objectContaining({
+        jira_sync_status: 'FAILED',
+        jira_sync_reason: 'JIRA_TRANSITION_FAILED',
+      }),
+    );
+    expect(taskRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('synchronizes claim update for explicit Jira members in linked groups', async () => {
+    taskRepo.findOne.mockResolvedValue({
+      id: taskId,
+      group_id: groupId,
+      title: 'Claim me',
+      description: null,
+      status: TaskStatus.TODO,
+      priority: TaskPriority.MEDIUM,
+      assignee_id: null,
+      jira_issue_key: null,
+      jira_issue_id: null,
+      jira_sync_status: 'FAILED',
+      jira_sync_reason: null,
+      due_at: null,
+      deleted_at: null,
+    });
+    groupRepo.findOne.mockResolvedValue({
+      id: groupId,
+      jira_project_key: 'SWP',
+    });
+    membershipRepo.findOne
+      .mockResolvedValueOnce({
+        group_id: groupId,
+        user_id: memberId,
+        role_in_group: MembershipRole.MEMBER,
+        left_at: null,
+      })
+      .mockResolvedValueOnce({
+        group_id: groupId,
+        user_id: memberId,
+        role_in_group: MembershipRole.MEMBER,
+        left_at: null,
+      })
+      .mockResolvedValueOnce({
+        group_id: groupId,
+        user_id: memberId,
+        role_in_group: MembershipRole.MEMBER,
+        left_at: null,
+      });
+    userRepo.findOne.mockResolvedValue({
+      id: memberId,
+      full_name: 'Member A',
+      email: 'member@fpt.edu.vn',
+    });
+    integrationTokenRepo.findOne
+      .mockResolvedValueOnce({ provider_user_id: 'jira-member-1' })
+      .mockResolvedValueOnce({ access_token: 'member-token' })
+      .mockResolvedValueOnce({ provider_user_id: 'jira-member-1' })
+      .mockResolvedValueOnce({ provider_user_id: 'jira-member-1' });
+    jiraService.createIssue.mockResolvedValue({
+      id: '10014',
+      key: 'SWP-14',
+    });
+    taskRepo._qb.getOne.mockResolvedValue({
+      id: taskId,
+      group_id: groupId,
+      title: 'Claim me',
+      description: null,
+      status: TaskStatus.IN_PROGRESS,
+      priority: TaskPriority.MEDIUM,
+      assignee_id: memberId,
+      jira_issue_key: 'SWP-14',
+      jira_sync_status: 'SUCCESS',
+      jira_sync_reason: null,
+      assignee: {
+        id: memberId,
+        full_name: 'Member A',
+        email: 'member@fpt.edu.vn',
+      },
+      created_at: new Date('2026-03-20T10:00:00.000Z'),
+      updated_at: new Date('2026-03-20T11:00:00.000Z'),
+    });
+
+    const result = await service.update(taskId, memberId, Role.STUDENT, {
+      assignee_id: memberId,
+    });
+
+    expect(jiraService.createIssue).toHaveBeenCalledWith(memberId, {
+      projectKey: 'SWP',
+      summary: 'Claim me',
+      description: null,
+    });
+    expect(jiraService.assignIssue).toHaveBeenCalledWith(
+      memberId,
+      'SWP-14',
+      'jira-member-1',
+    );
+    expect(result.jira_sync_status).toBe('SUCCESS');
+    expect(result.jira_issue_key).toBe('SWP-14');
   });
 });

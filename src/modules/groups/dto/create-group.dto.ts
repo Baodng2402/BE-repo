@@ -1,7 +1,20 @@
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
 
 export class CreateGroupDto {
+  @ApiProperty({
+    example: '550e8400-e29b-41d4-a716-446655440000',
+    description: 'Class UUID that the group belongs to',
+  })
+  @IsUUID('4', { message: 'class_id must be a valid UUID' })
+  class_id: string;
+
   @ApiProperty({ example: 'Group Alpha', description: 'Group name' })
   @IsString()
   @IsNotEmpty({ message: 'Group name is required' })

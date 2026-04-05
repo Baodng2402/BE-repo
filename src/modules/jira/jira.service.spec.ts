@@ -226,4 +226,80 @@ describe('JiraService', () => {
       }),
     );
   });
+
+  it('returns true when Jira account is an explicit project role actor', async () => {
+    integrationTokenRepository.findOne.mockResolvedValue({
+      ...jiraToken,
+      token_expires_at: null,
+      access_token: 'valid-access-token',
+    });
+    httpService.axiosRef.get
+      .mockResolvedValueOnce({
+        data: [{ id: 'cloud-1', scopes: ['read:jira-work'] }],
+      })
+      .mockResolvedValueOnce({
+        data: [{ id: 'cloud-1', scopes: ['read:jira-work'] }],
+      })
+      .mockResolvedValueOnce({
+        data: {
+          actors: [
+            {
+              actorUser: {
+                accountId: 'jira-user-1',
+              },
+            },
+          ],
+        },
+      });
+    httpService.get.mockReturnValue(
+      of({
+        data: {
+          Administrators:
+            'https://api.atlassian.com/ex/jira/cloud-1/rest/api/3/project/MOB/role/10002',
+        },
+      }),
+    );
+
+    await expect(
+      service.isExplicitProjectMember('user-1', 'MOB', 'jira-user-1'),
+    ).resolves.toBe(true);
+  });
+
+  it('returns false when Jira account is not listed in project role actors', async () => {
+    integrationTokenRepository.findOne.mockResolvedValue({
+      ...jiraToken,
+      token_expires_at: null,
+      access_token: 'valid-access-token',
+    });
+    httpService.axiosRef.get
+      .mockResolvedValueOnce({
+        data: [{ id: 'cloud-1', scopes: ['read:jira-work'] }],
+      })
+      .mockResolvedValueOnce({
+        data: [{ id: 'cloud-1', scopes: ['read:jira-work'] }],
+      })
+      .mockResolvedValueOnce({
+        data: {
+          actors: [
+            {
+              actorUser: {
+                accountId: 'jira-someone-else',
+              },
+            },
+          ],
+        },
+      });
+    httpService.get.mockReturnValue(
+      of({
+        data: {
+          Users:
+            'https://api.atlassian.com/ex/jira/cloud-1/rest/api/3/project/MOB/role/10003',
+        },
+      }),
+    );
+
+    await expect(
+      service.isExplicitProjectMember('user-1', 'MOB', 'jira-user-1'),
+    ).resolves.toBe(false);
+  });
 });

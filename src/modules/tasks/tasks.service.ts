@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
@@ -12,9 +14,11 @@ import {
   IntegrationProvider,
   MembershipRole,
   Role,
+  TaskJiraSyncStatus,
   TaskPriority,
   TaskStatus,
 } from '../../common/enums';
+import { createIntegrationException } from '../../common/errors/integration-error';
 import {
   Group,
   GroupMembership,
@@ -44,6 +48,24 @@ export class TasksService {
     private readonly integrationTokenRepository: Repository<IntegrationToken>,
     private readonly jiraService: JiraService,
   ) {}
+
+  private getIntegrationErrorBody(error: unknown) {
+    if (!(error instanceof HttpException)) {
+      return null;
+    }
+
+    const response = error.getResponse();
+    if (!response || typeof response !== 'object') {
+      return null;
+    }
+
+    return response as {
+      code?: string;
+      message?: string;
+      reconnectRequired?: boolean;
+      details?: Record<string, unknown>;
+    };
+  }
 
   async findAll(userId: string, query: QueryTasksDto) {
     const {
@@ -107,9 +129,12 @@ export class TasksService {
       'task.description',
       'task.status',
       'task.priority',
+      'task.assignee_id',
       'task.due_at',
       'task.jira_issue_key',
       'task.jira_issue_id',
+      'task.jira_sync_status',
+      'task.jira_sync_reason',
       'task.created_at',
       'task.updated_at',
       'assignee.id',
@@ -153,6 +178,10 @@ export class TasksService {
       assignee_id: dto.assignee_id || null,
       due_at: dto.due_at ? new Date(dto.due_at) : null,
       created_by_id: userId,
+      jira_sync_status: group.jira_project_key
+        ? TaskJiraSyncStatus.FAILED
+        : TaskJiraSyncStatus.SKIPPED,
+      jira_sync_reason: group.jira_project_key ? null : 'NO_PROJECT_KEY',
     });
 
     const savedTask = await this.taskRepository.save(task);
@@ -190,7 +219,8 @@ export class TasksService {
       await this.assertCanManageGroup(task.group_id, userId, userRole);
     }
 
-    Object.assign(task, {
+    const previousTaskState = { ...task } as Task;
+    const nextTaskState = Object.assign(task, {
       title: dto.title !== undefined ? dto.title.trim() : task.title,
       description:
         dto.description !== undefined
@@ -215,10 +245,22 @@ export class TasksService {
           : task.due_at,
     });
 
-    const updatedTask = await this.taskRepository.save(task);
-    await this.syncTaskToJira(userId, group, updatedTask);
+    if (group.jira_project_key) {
+      await this.syncJiraLinkedTaskUpdate(
+        userId,
+        group,
+        previousTaskState,
+        nextTaskState,
+        dto,
+      );
+    } else {
+      nextTaskState.jira_sync_status = TaskJiraSyncStatus.SKIPPED;
+      nextTaskState.jira_sync_reason = 'NO_PROJECT_KEY';
+    }
+
+    const updatedTask = await this.taskRepository.save(nextTaskState);
     this.logTaskAction('update', userId, task.group_id, task.id);
-    return this.getTaskForViewer(task.id, userId);
+    return this.getTaskForViewer(updatedTask.id, userId);
   }
 
   async remove(taskId: string, userId: string, userRole: Role) {
@@ -257,6 +299,7 @@ export class TasksService {
     return {
       id: task.id,
       key: task.jira_issue_key || null,
+      jira_issue_key: task.jira_issue_key || null,
       group_id: task.group_id,
       title: task.title,
       description: task.description,
@@ -264,6 +307,8 @@ export class TasksService {
       priority: task.priority,
       assignee_id: task.assignee_id || null,
       assignee_name: task.assignee?.full_name || task.assignee?.email || null,
+      jira_sync_status: task.jira_sync_status ?? TaskJiraSyncStatus.SKIPPED,
+      jira_sync_reason: task.jira_sync_reason ?? null,
       due_at: task.due_at,
       created_at: task.created_at,
       updated_at: task.updated_at,
@@ -360,6 +405,90 @@ export class TasksService {
     return jiraToken?.provider_user_id || null;
   }
 
+  private async getRequiredJiraAccountId(userId: string, message: string) {
+    const jiraAccountId = await this.getJiraAccountIdByUserId(userId);
+
+    if (jiraAccountId) {
+      return jiraAccountId;
+    }
+
+    throw createIntegrationException(HttpStatus.UNAUTHORIZED, {
+      code: 'JIRA_ACCOUNT_NOT_LINKED',
+      provider: IntegrationProvider.JIRA,
+      message,
+      reconnectRequired: true,
+    });
+  }
+
+  private mapJiraTaskActionError(
+    error: unknown,
+    fallbackCode: 'JIRA_ASSIGN_FAILED' | 'JIRA_TRANSITION_FAILED',
+    fallbackMessage: string,
+  ): never {
+    const body = this.getIntegrationErrorBody(error);
+
+    if (body?.code === 'TOKEN_EXPIRED' || body?.code === 'ACCOUNT_NOT_LINKED') {
+      throw createIntegrationException(HttpStatus.UNAUTHORIZED, {
+        code: 'JIRA_ACCOUNT_NOT_LINKED',
+        provider: IntegrationProvider.JIRA,
+        message:
+          'Your Jira account is not linked or needs to be reconnected before performing this action.',
+        reconnectRequired: true,
+        details: body?.details,
+      });
+    }
+
+    if (body?.code === 'INSUFFICIENT_SCOPE') {
+      throw createIntegrationException(HttpStatus.FORBIDDEN, {
+        code: 'JIRA_MEMBERSHIP_REQUIRED',
+        provider: IntegrationProvider.JIRA,
+        message:
+          'You must be a member of the linked Jira project team to update this task.',
+        details: body?.details,
+      });
+    }
+
+    throw createIntegrationException(HttpStatus.BAD_REQUEST, {
+      code: fallbackCode,
+      provider: IntegrationProvider.JIRA,
+      message: fallbackMessage,
+      details: body?.details,
+    });
+  }
+
+  private async assertExplicitJiraProjectMembership(
+    actorUserId: string,
+    projectKey: string,
+    candidateUserId: string,
+    candidateLabel: 'actor' | 'assignee',
+  ) {
+    const jiraAccountId = await this.getRequiredJiraAccountId(
+      candidateUserId,
+      candidateLabel === 'actor'
+        ? 'Your Jira account is not linked or needs to be reconnected before performing this action.'
+        : 'The selected assignee must link a Jira account before this task can be synced.',
+    );
+
+    const isMember = await this.jiraService.isExplicitProjectMember(
+      actorUserId,
+      projectKey,
+      jiraAccountId,
+    );
+
+    if (!isMember) {
+      throw createIntegrationException(HttpStatus.FORBIDDEN, {
+        code: 'JIRA_MEMBERSHIP_REQUIRED',
+        provider: IntegrationProvider.JIRA,
+        message:
+          candidateLabel === 'actor'
+            ? 'You must be a member of the linked Jira project team to update this task.'
+            : 'The selected assignee must belong to the linked Jira project team.',
+      });
+    }
+
+    return jiraAccountId;
+  }
+
   private async resolveSyncUserId(groupId: string, requestingUserId: string): Promise<string | null> {
     // Use requesting user's token if available
     const ownToken = await this.integrationTokenRepository.findOne({
@@ -383,6 +512,13 @@ export class TasksService {
 
   private async syncTaskToJira(userId: string, group: Group, task: Task) {
     if (!group.jira_project_key) {
+      await this.taskRepository.update(
+        { id: task.id },
+        {
+          jira_sync_status: TaskJiraSyncStatus.SKIPPED,
+          jira_sync_reason: 'NO_PROJECT_KEY',
+        },
+      );
       return;
     }
 
@@ -414,16 +550,29 @@ export class TasksService {
         issueId = createdIssue.id;
         await this.taskRepository.update(
           { id: task.id },
-          { jira_issue_key: issueKey, jira_issue_id: issueId },
+          {
+            jira_issue_key: issueKey,
+            jira_issue_id: issueId,
+          },
         );
       } catch (error: unknown) {
+        const body = this.getIntegrationErrorBody(error);
         this.logger.warn(
           JSON.stringify({
             event: 'task_jira_create_failed',
             group_id: group.id,
             task_id: task.id,
-            reason: error instanceof Error ? error.message : 'createIssue failed',
+            jira_sync_reason:
+              body?.code ||
+              (error instanceof Error ? error.message : 'createIssue failed'),
           }),
+        );
+        await this.taskRepository.update(
+          { id: task.id },
+          {
+            jira_sync_status: TaskJiraSyncStatus.FAILED,
+            jira_sync_reason: body?.code || 'JIRA_SYNC_FAILED',
+          },
         );
         return;
       }
@@ -435,22 +584,47 @@ export class TasksService {
       try {
         await this.jiraService.assignIssue(syncUserId, issueKey, jiraAssigneeAccountId);
       } catch (error: unknown) {
+        const body = this.getIntegrationErrorBody(error);
         this.logger.warn(
           JSON.stringify({
             event: 'task_jira_assign_failed',
             group_id: group.id,
             task_id: task.id,
             issue_key: issueKey,
-            reason: error instanceof Error ? error.message : 'assignIssue failed',
+            jira_sync_reason:
+              body?.code ||
+              (error instanceof Error ? error.message : 'assignIssue failed'),
           }),
+        );
+        await this.taskRepository.update(
+          { id: task.id },
+          {
+            jira_sync_status: TaskJiraSyncStatus.FAILED,
+            jira_sync_reason: body?.code || 'JIRA_SYNC_FAILED',
+          },
         );
       }
     }
 
     // Step 3: transition — fail gracefully, independent of assign
     try {
-      await this.jiraService.transitionIssue(syncUserId, issueKey, task.status);
+      const transitioned = await this.jiraService.transitionIssue(
+        syncUserId,
+        issueKey,
+        task.status,
+      );
+      if (!transitioned) {
+        await this.taskRepository.update(
+          { id: task.id },
+          {
+            jira_sync_status: TaskJiraSyncStatus.FAILED,
+            jira_sync_reason: 'JIRA_SYNC_FAILED',
+          },
+        );
+        return;
+      }
     } catch (error: unknown) {
+      const body = this.getIntegrationErrorBody(error);
       this.logger.warn(
         JSON.stringify({
           event: 'task_jira_transition_failed',
@@ -458,10 +632,164 @@ export class TasksService {
           task_id: task.id,
           issue_key: issueKey,
           status: task.status,
-          reason: error instanceof Error ? error.message : 'transitionIssue failed',
+          jira_sync_reason:
+            body?.code ||
+            (error instanceof Error ? error.message : 'transitionIssue failed'),
         }),
       );
+      await this.taskRepository.update(
+        { id: task.id },
+        {
+          jira_sync_status: TaskJiraSyncStatus.FAILED,
+          jira_sync_reason: body?.code || 'JIRA_SYNC_FAILED',
+        },
+      );
+      return;
     }
+
+    await this.taskRepository.update(
+      { id: task.id },
+      {
+        jira_sync_status: TaskJiraSyncStatus.SUCCESS,
+        jira_sync_reason: null,
+      },
+    );
+  }
+
+  private async syncJiraLinkedTaskUpdate(
+    actorUserId: string,
+    group: Group,
+    previousTaskState: Task,
+    nextTaskState: Task,
+    dto: UpdateTaskDto,
+  ) {
+    const projectKey = group.jira_project_key;
+    if (!projectKey) {
+      nextTaskState.jira_sync_status = TaskJiraSyncStatus.SKIPPED;
+      nextTaskState.jira_sync_reason = 'NO_PROJECT_KEY';
+      return;
+    }
+
+    const isClaimOrReassign = dto.assignee_id !== undefined;
+    const isStatusChange = dto.status !== undefined;
+
+    if (!isClaimOrReassign && !isStatusChange) {
+      nextTaskState.jira_sync_status =
+        previousTaskState.jira_sync_status ?? TaskJiraSyncStatus.SKIPPED;
+      nextTaskState.jira_sync_reason = previousTaskState.jira_sync_reason ?? null;
+      return;
+    }
+
+    await this.assertExplicitJiraProjectMembership(
+      actorUserId,
+      projectKey,
+      actorUserId,
+      'actor',
+    );
+
+    let jiraAssigneeAccountId: string | null = null;
+    if (nextTaskState.assignee_id) {
+      jiraAssigneeAccountId = await this.assertExplicitJiraProjectMembership(
+        actorUserId,
+        projectKey,
+        nextTaskState.assignee_id,
+        'assignee',
+      );
+    }
+
+    let issueKey = previousTaskState.jira_issue_key || null;
+    let issueId = previousTaskState.jira_issue_id || null;
+
+    if (!issueKey) {
+      try {
+        const createdIssue = await this.jiraService.createIssue(actorUserId, {
+          projectKey,
+          summary: nextTaskState.title,
+          description: nextTaskState.description,
+        });
+        issueKey = createdIssue.key;
+        issueId = createdIssue.id;
+      } catch (error) {
+        await this.taskRepository.update(
+          { id: previousTaskState.id },
+          {
+            jira_sync_status: TaskJiraSyncStatus.FAILED,
+            jira_sync_reason: 'JIRA_ASSIGN_FAILED',
+          },
+        );
+        this.mapJiraTaskActionError(
+          error,
+          'JIRA_ASSIGN_FAILED',
+          'Failed to synchronize Jira assignee for this task.',
+        );
+      }
+    }
+
+    if (
+      jiraAssigneeAccountId &&
+      (isClaimOrReassign || !previousTaskState.jira_issue_key)
+    ) {
+      try {
+        await this.jiraService.assignIssue(
+          actorUserId,
+          issueKey as string,
+          jiraAssigneeAccountId,
+        );
+      } catch (error) {
+        await this.taskRepository.update(
+          { id: previousTaskState.id },
+          {
+            jira_issue_key: issueKey,
+            jira_issue_id: issueId,
+            jira_sync_status: TaskJiraSyncStatus.FAILED,
+            jira_sync_reason: 'JIRA_ASSIGN_FAILED',
+          },
+        );
+        this.mapJiraTaskActionError(
+          error,
+          'JIRA_ASSIGN_FAILED',
+          'Failed to synchronize Jira assignee for this task.',
+        );
+      }
+    }
+
+    if (isStatusChange) {
+      try {
+        const transitioned = await this.jiraService.transitionIssue(
+          actorUserId,
+          issueKey as string,
+          nextTaskState.status,
+        );
+
+        if (!transitioned) {
+          throw createIntegrationException(HttpStatus.BAD_REQUEST, {
+            code: 'JIRA_TRANSITION_FAILED',
+            provider: IntegrationProvider.JIRA,
+            message: 'Failed to synchronize Jira status for this task.',
+          });
+        }
+      } catch (error) {
+        await this.taskRepository.update(
+          { id: previousTaskState.id },
+          {
+            jira_issue_key: issueKey,
+            jira_issue_id: issueId,
+            jira_sync_status: TaskJiraSyncStatus.FAILED,
+            jira_sync_reason: 'JIRA_TRANSITION_FAILED',
+          },
+        );
+        this.mapJiraTaskActionError(
+          error,
+          'JIRA_TRANSITION_FAILED',
+          'Failed to synchronize Jira status for this task.',
+        );
+      }
+    }
+
+    nextTaskState.jira_issue_key = issueKey;
+    nextTaskState.jira_issue_id = issueId;
+    nextTaskState.jira_sync_status = TaskJiraSyncStatus.SUCCESS;
+    nextTaskState.jira_sync_reason = null;
   }
 
   private async assertCanViewGroup(groupId: string, userId: string) {
