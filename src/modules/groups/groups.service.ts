@@ -10,6 +10,7 @@ import { Brackets, DataSource, In, IsNull, Repository } from 'typeorm';
 import { ERROR_MESSAGES } from '../../common/constants';
 import {
   Class,
+  ClassMembership,
   Group,
   GroupMembership,
   GroupRepository,
@@ -39,6 +40,8 @@ export class GroupsService {
     private readonly groupRepository: Repository<Group>,
     @InjectRepository(GroupMembership)
     private readonly membershipRepository: Repository<GroupMembership>,
+    @InjectRepository(ClassMembership)
+    private readonly classMembershipRepository: Repository<ClassMembership>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(Topic)
@@ -69,16 +72,6 @@ export class GroupsService {
 
     if (userRole === Role.LECTURER && targetClass.lecturer_id !== userId) {
       throw new ForbiddenException(ERROR_MESSAGES.GROUPS.NOT_CLASS_LECTURER);
-    }
-
-    const groupsInClass = await this.groupRepository.count({
-      where: { class_id: dto.class_id },
-    });
-
-    if (groupsInClass >= targetClass.max_groups) {
-      throw new BadRequestException(
-        ERROR_MESSAGES.GROUPS.CLASS_MAX_GROUPS_EXCEEDED,
-      );
     }
 
     const duplicateName = await this.groupRepository
@@ -318,6 +311,103 @@ export class GroupsService {
     return { message: 'Joined group successfully', role_assigned: userRole };
   }
 
+  async updateClassMemberCapacity(
+    classId: string,
+    maxStudentsPerGroup: number,
+    requesterId: string,
+    requesterRole: Role,
+  ) {
+    const targetClass = await this.classRepository.findOne({
+      where: { id: classId },
+    });
+
+    if (!targetClass) {
+      throw new NotFoundException(ERROR_MESSAGES.CLASSES.NOT_FOUND);
+    }
+
+    if (
+      requesterRole !== Role.ADMIN &&
+      !(
+        requesterRole === Role.LECTURER &&
+        targetClass.lecturer_id === requesterId
+      )
+    ) {
+      throw new ForbiddenException(ERROR_MESSAGES.GROUPS.NOT_CLASS_LECTURER);
+    }
+
+    const previous = targetClass.max_students_per_group;
+    targetClass.max_students_per_group = maxStudentsPerGroup;
+    await this.classRepository.save(targetClass);
+
+    return {
+      class_id: targetClass.id,
+      previous_max_students_per_group: previous,
+      max_students_per_group: targetClass.max_students_per_group,
+    };
+  }
+
+  async getUngroupedStudentsByClass(
+    classId: string,
+    requesterId: string,
+    requesterRole: Role,
+  ) {
+    const targetClass = await this.classRepository.findOne({
+      where: { id: classId },
+    });
+
+    if (!targetClass) {
+      throw new NotFoundException(ERROR_MESSAGES.CLASSES.NOT_FOUND);
+    }
+
+    if (
+      requesterRole !== Role.ADMIN &&
+      !(
+        requesterRole === Role.LECTURER &&
+        targetClass.lecturer_id === requesterId
+      )
+    ) {
+      throw new ForbiddenException(ERROR_MESSAGES.GROUPS.NOT_CLASS_LECTURER);
+    }
+
+    const activeGroupedRows = await this.membershipRepository
+      .createQueryBuilder('membership')
+      .innerJoin('membership.group', 'group')
+      .select('membership.user_id', 'user_id')
+      .where('group.class_id = :classId', { classId })
+      .andWhere('membership.left_at IS NULL')
+      .groupBy('membership.user_id')
+      .getRawMany<{ user_id: string }>();
+
+    const activeGroupedUserIds = new Set(
+      activeGroupedRows.map((row) => row.user_id),
+    );
+
+    const classMemberships = await this.classMembershipRepository.find({
+      where: { class_id: classId },
+      relations: { user: true },
+    });
+
+    const ungroupedStudents = classMemberships
+      .filter(
+        (membership) =>
+          membership.user &&
+          [Role.STUDENT, Role.GROUP_LEADER].includes(membership.user.role) &&
+          !activeGroupedUserIds.has(membership.user_id),
+      )
+      .map((membership) => ({
+        id: membership.user.id,
+        student_id: membership.user.student_id,
+        full_name: membership.user.full_name,
+        email: membership.user.email,
+      }));
+
+    return {
+      class_id: classId,
+      count: ungroupedStudents.length,
+      students: ungroupedStudents,
+    };
+  }
+
   async update(
     groupId: string,
     userId: string,
@@ -546,10 +636,50 @@ export class GroupsService {
       throw new NotFoundException(ERROR_MESSAGES.GROUPS.MEMBER_NOT_FOUND);
     }
 
-    await this.membershipRepository.update(
-      { group_id: groupId, user_id: memberId },
-      { role_in_group: dto.role_in_group },
-    );
+    if (dto.role_in_group === MembershipRole.LEADER) {
+      await this.dataSource.transaction(async (manager) => {
+        await manager
+          .createQueryBuilder()
+          .update(GroupMembership)
+          .set({ role_in_group: MembershipRole.MEMBER })
+          .where('group_id = :groupId', { groupId })
+          .andWhere('left_at IS NULL')
+          .andWhere('user_id != :memberId', { memberId })
+          .andWhere('role_in_group = :leaderRole', {
+            leaderRole: MembershipRole.LEADER,
+          })
+          .execute();
+
+        await manager
+          .createQueryBuilder()
+          .update(GroupMembership)
+          .set({ role_in_group: MembershipRole.LEADER })
+          .where('group_id = :groupId', { groupId })
+          .andWhere('user_id = :memberId', { memberId })
+          .execute();
+      });
+    } else {
+      if (membership.role_in_group === MembershipRole.LEADER) {
+        const leaderCount = await this.membershipRepository.count({
+          where: {
+            group_id: groupId,
+            role_in_group: MembershipRole.LEADER,
+            left_at: IsNull(),
+          },
+        });
+
+        if (leaderCount <= 1) {
+          throw new BadRequestException(
+            ERROR_MESSAGES.GROUPS.CANNOT_REMOVE_LAST_LEADER,
+          );
+        }
+      }
+
+      await this.membershipRepository.update(
+        { group_id: groupId, user_id: memberId },
+        { role_in_group: dto.role_in_group },
+      );
+    }
 
     return this.findMembers(groupId);
   }
@@ -764,9 +894,17 @@ export class GroupsService {
     for (const [groupId, incoming] of incomingCountMap) {
       const current = currentCountMap.get(groupId) || 0;
       if (current + incoming > cls.max_students_per_group) {
-        throw new BadRequestException(
-          ERROR_MESSAGES.GROUPS.TARGET_GROUP_WOULD_EXCEED_MAX,
-        );
+        throw new BadRequestException({
+          message: ERROR_MESSAGES.GROUPS.TARGET_GROUP_WOULD_EXCEED_MAX,
+          code: 'TARGET_GROUP_WOULD_EXCEED_MAX',
+          details: {
+            target_group_id: groupId,
+            current_capacity: cls.max_students_per_group,
+            required_capacity: current + incoming,
+            current_members: current,
+            incoming_members: incoming,
+          },
+        });
       }
     }
 

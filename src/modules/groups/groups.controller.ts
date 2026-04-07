@@ -30,6 +30,7 @@ import { AddMemberDto } from './dto/add-member.dto';
 import { CreateGroupDto } from './dto/create-group.dto';
 import { QueryGroupsDto } from './dto/query-groups.dto';
 import { ReassignMembersDto } from './dto/reassign-members.dto';
+import { UpdateClassMemberCapacityDto } from './dto/update-class-member-capacity.dto';
 import { UpdateGroupDto } from './dto/update-group.dto';
 import { UpdateMemberDto } from './dto/update-member.dto';
 import {
@@ -87,6 +88,41 @@ export class GroupsController {
   ) {
     return await this.groupsService.getGroupsByClass(
       classId,
+      req.user.id,
+      req.user.role as Role,
+    );
+  }
+
+  @Get('class/:classId/ungrouped-students')
+  @Roles(Role.LECTURER, Role.ADMIN)
+  @ApiOperation({
+    summary: 'List students in class that are not assigned to any active group',
+  })
+  async getUngroupedStudentsByClass(
+    @Param('classId', ParseUUIDPipe) classId: string,
+    @Req() req: AuthorizedRequest,
+  ) {
+    return this.groupsService.getUngroupedStudentsByClass(
+      classId,
+      req.user.id,
+      req.user.role as Role,
+    );
+  }
+
+  @Patch('class/:classId/member-capacity')
+  @Roles(Role.LECTURER, Role.ADMIN)
+  @ApiOperation({
+    summary:
+      'Update max students per group for a class (class lecturer or admin)',
+  })
+  async updateClassMemberCapacity(
+    @Param('classId', ParseUUIDPipe) classId: string,
+    @Req() req: AuthorizedRequest,
+    @Body() dto: UpdateClassMemberCapacityDto,
+  ) {
+    return this.groupsService.updateClassMemberCapacity(
+      classId,
+      dto.max_students_per_group,
       req.user.id,
       req.user.role as Role,
     );
