@@ -142,10 +142,15 @@ export class SemesterService {
       throw new ConflictException('Semester code already exists.');
     }
 
+    const nextStatus = dto.status || SemesterStatus.UPCOMING;
+    if (nextStatus === SemesterStatus.ACTIVE) {
+      await this.assertNoOtherActiveSemester();
+    }
+
     const semester = this.semesterRepository.create({
       ...dto,
       code: dto.code.toUpperCase(),
-      status: dto.status || SemesterStatus.UPCOMING,
+      status: nextStatus,
     });
 
     const savedSemester = await this.semesterRepository.save(semester);
@@ -1125,7 +1130,6 @@ export class SemesterService {
       REVIEW_2: 'Review 2',
       REVIEW_3: 'Review 3',
       FINAL_SCORE: 'Final Score',
-      FINAL_PRESENTATION: 'Final Score',
     };
     return labels[code] || code;
   }
@@ -1140,6 +1144,14 @@ export class SemesterService {
       if (existing && existing.id !== id) {
         throw new ConflictException('Semester code already exists.');
       }
+    }
+
+    const nextStatus = dto.status ?? semester.status;
+    if (
+      nextStatus === SemesterStatus.ACTIVE &&
+      semester.status !== SemesterStatus.ACTIVE
+    ) {
+      await this.assertNoOtherActiveSemester(id);
     }
 
     Object.assign(semester, {
@@ -2075,7 +2087,8 @@ export class SemesterService {
 
     for (const row of rows) {
       const normalizedRole = row.role?.trim().toUpperCase() || '';
-      const resolvedRole = Role.STUDENT;
+      const resolvedRole =
+        normalizedRole === 'LECTURER' ? Role.LECTURER : Role.STUDENT;
       const normalizedSemesterCode = row.semester_code.trim().toUpperCase();
       const normalizedEmail = row.email.trim().toLowerCase();
       const normalizedClassCode = row.class_code.trim().toUpperCase();
@@ -2098,14 +2111,12 @@ export class SemesterService {
         );
       };
 
-      if (normalizedRole === 'LECTURER') {
-        fail(
-          'Lecturer rows are no longer supported in semester import. Use Teaching Assignments to map lecturers to classes.',
-        );
-        continue;
-      }
-      if (normalizedRole && normalizedRole !== 'STUDENT') {
-        fail('Role must be STUDENT when provided.');
+      if (
+        normalizedRole &&
+        normalizedRole !== 'STUDENT' &&
+        normalizedRole !== 'LECTURER'
+      ) {
+        fail('Role must be STUDENT or LECTURER when provided.');
         continue;
       }
       if (!normalizedSemesterCode || !normalizedEmail || !normalizedClassCode) {
@@ -2122,12 +2133,103 @@ export class SemesterService {
         fail('Invalid email format.');
         continue;
       }
-      if (!row.student_id.trim()) {
+      if (resolvedRole === Role.STUDENT && !row.student_id.trim()) {
         fail('student_id is required for student import rows.');
         continue;
       }
 
       try {
+        const targetClass = ensureClassForCode(
+          normalizedClassCode,
+          normalizedClassName,
+        );
+        if (!targetClass) {
+          fail(
+            `Class ${normalizedClassCode} is not provisioned in selected semester. Admin must create/maintain classes before student import.`,
+          );
+          continue;
+        }
+
+        if (resolvedRole === Role.LECTURER) {
+          let lecturer = existingUsers.get(normalizedEmail);
+          let createdLecturer = false;
+
+          if (lecturer && lecturer.role !== Role.LECTURER) {
+            fail(
+              `Email ${row.email} already belongs to a non-lecturer account.`,
+            );
+            continue;
+          }
+
+          if (!lecturer && mode === 'IMPORT') {
+            lecturer = await this.userRepository.save(
+              this.userRepository.create({
+                email: normalizedEmail,
+                full_name: row.full_name.trim(),
+                password_hash: await bcrypt.hash(
+                  randomBytes(8).toString('hex'),
+                  10,
+                ),
+                role: Role.LECTURER,
+                primary_provider: AuthProvider.EMAIL,
+              }),
+            );
+            existingUsers.set(normalizedEmail, lecturer);
+            createdLecturer = true;
+          }
+
+          if (!lecturer && mode === 'VALIDATE') {
+            createdLecturer = true;
+          }
+
+          if (createdLecturer) {
+            markCounter('lecturers', 'created', normalizedEmail);
+          } else {
+            markCounter('lecturers', 'updated', normalizedEmail);
+          }
+
+          if (
+            targetClass.lecturer_id &&
+            targetClass.lecturer_id !== lecturer?.id
+          ) {
+            fail(
+              `Class ${normalizedClassCode} is already assigned to another lecturer.`,
+            );
+            continue;
+          }
+
+          if (
+            mode === 'IMPORT' &&
+            lecturer &&
+            targetClass.lecturer_id !== lecturer.id
+          ) {
+            await this.classRepository.update(
+              { id: targetClass.id },
+              { lecturer_id: lecturer.id },
+            );
+            targetClass.lecturer_id = lecturer.id;
+            targetClass.lecturer = lecturer;
+          }
+
+          summary.rows.success += 1;
+          rowLogs.push(
+            this.importRowLogRepository.create({
+              batch_id: batch.id,
+              row_number: row.row_number,
+              role: resolvedRole,
+              email: normalizedEmail,
+              class_code: normalizedClassCode,
+              status: 'SUCCESS',
+              message:
+                mode === 'VALIDATE'
+                  ? 'Lecturer row validated successfully.'
+                  : 'Lecturer assigned to class successfully.',
+              payload: logPayload,
+            }),
+          );
+          continue;
+        }
+
         let student = existingUsers.get(normalizedEmail);
         let createdStudent = false;
 
@@ -2162,17 +2264,6 @@ export class SemesterService {
           markCounter('students', 'created', normalizedEmail);
         } else {
           markCounter('students', 'updated', normalizedEmail);
-        }
-
-        const targetClass = ensureClassForCode(
-          normalizedClassCode,
-          normalizedClassName,
-        );
-        if (!targetClass) {
-          fail(
-            `Class ${normalizedClassCode} is not provisioned in selected semester. Admin must create/maintain classes before student import.`,
-          );
-          continue;
         }
 
         if (mode === 'IMPORT') {
@@ -2279,7 +2370,7 @@ export class SemesterService {
 
   /**
    * Resolves the active checkpoint for a specific class based on its
-   * ClassCheckpoint configuration. Falls back to FINAL_PRESENTATION for the
+   * ClassCheckpoint configuration. Falls back to FINAL_SCORE for the
    * last 2 weeks of the semester.
    */
   private async resolveClassCheckpoint(
@@ -2312,15 +2403,18 @@ export class SemesterService {
       }
     }
 
-    // After last checkpoint: check for FINAL_PRESENTATION window
+    // After last checkpoint: check for FINAL_SCORE window
     const lastCheckpointWeek =
       checkpoints.length > 0
         ? checkpoints[checkpoints.length - 1].deadline_week
         : 10;
-    if (currentWeek > lastCheckpointWeek) {
+    if (
+      currentWeek > lastCheckpointWeek &&
+      currentWeek <= lastCheckpointWeek + 2
+    ) {
       return {
-        code: ReviewMilestoneCode.FINAL_PRESENTATION,
-        label: 'Final Presentation',
+        code: ReviewMilestoneCode.FINAL_SCORE,
+        label: 'Final Score',
         week_start: lastCheckpointWeek + 1,
         week_end: lastCheckpointWeek + 2,
         description: null,
@@ -2834,6 +2928,18 @@ export class SemesterService {
       start_date: semester.start_date,
       end_date: semester.end_date,
     };
+  }
+
+  private async assertNoOtherActiveSemester(excludeSemesterId?: string) {
+    const activeSemester = await this.semesterRepository.findOne({
+      where: { status: SemesterStatus.ACTIVE },
+    });
+
+    if (activeSemester && activeSemester.id !== excludeSemesterId) {
+      throw new ConflictException(
+        'An active semester already exists. Close it before activating another semester.',
+      );
+    }
   }
 
   private async seedDefaultClassesForSemester(semesterCode: string) {

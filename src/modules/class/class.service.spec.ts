@@ -1,6 +1,7 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { Role } from '../../common/enums';
 import { ClassMembership } from '../../entities/class-membership.entity';
 import { Class } from '../../entities/class.entity';
 import { Group } from '../../entities/group.entity';
@@ -59,6 +60,41 @@ describe('ClassService', () => {
         studentEmails: [],
       }),
     ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('returns classes assigned to lecturer for myClasses', async () => {
+    classRepo.find.mockResolvedValue([
+      { id: 'class-1', code: 'SWP391', lecturer_id: 'lecturer-1' },
+    ]);
+
+    const result = await service.myClasses('lecturer-1', Role.LECTURER);
+
+    expect(classRepo.find).toHaveBeenCalledWith({
+      where: { lecturer_id: 'lecturer-1' },
+      order: { code: 'ASC' },
+    });
+    expect(result).toHaveLength(1);
+  });
+
+  it('returns enrolled classes for student myClasses', async () => {
+    membershipRepo.find.mockResolvedValue([
+      {
+        class: { id: 'class-2', code: 'SWP392', semester: 'SP26' },
+      },
+      {
+        class: null,
+      },
+    ]);
+
+    const result = await service.myClasses('student-1', Role.STUDENT);
+
+    expect(membershipRepo.find).toHaveBeenCalledWith({
+      where: { user_id: 'student-1' },
+      relations: ['class'],
+    });
+    expect(result).toEqual([
+      { id: 'class-2', code: 'SWP392', semester: 'SP26' },
+    ]);
   });
 
   describe('importStudents', () => {

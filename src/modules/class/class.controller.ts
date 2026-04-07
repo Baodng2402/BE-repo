@@ -66,12 +66,12 @@ export class ClassController {
 
   @Get('my-classes')
   @ApiOperation({
-    summary: '[Step 0] Get classes enrolled by current user',
+    summary: '[Step 0] Get classes for current user',
     description:
-      'Student quick path: call this first, then use classId with GET /groups/class/:classId.',
+      'Lecturer gets assigned classes. Student gets enrolled classes. Use classId with GET /groups/class/:classId next.',
   })
   async getMyClasses(@Req() req: AuthorizedRequest) {
-    return this.classService.myClasses(req.user.id);
+    return this.classService.myClasses(req.user.id, req.user.role as Role);
   }
 
   @Get(':id/analytics')
