@@ -245,6 +245,45 @@ describe('SemesterService', () => {
     ).rejects.toThrow(ConflictException);
   });
 
+  it('blocks creating an active semester when another active semester exists', async () => {
+    semesterRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      id: 'semester-active',
+      code: 'SP26',
+      status: SemesterStatus.ACTIVE,
+    });
+
+    await expect(
+      service.createSemester({
+        code: 'fa26',
+        name: 'Fall 2026',
+        start_date: '2026-09-01',
+        end_date: '2026-12-31',
+        status: SemesterStatus.ACTIVE,
+      }),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('blocks updating an upcoming semester to active when another active semester exists', async () => {
+    semesterRepo.findOne
+      .mockResolvedValueOnce({
+        id: 'semester-upcoming',
+        code: 'FA26',
+        name: 'Fall 2026',
+        status: SemesterStatus.UPCOMING,
+      })
+      .mockResolvedValueOnce({
+        id: 'semester-active',
+        code: 'SP26',
+        status: SemesterStatus.ACTIVE,
+      });
+
+    await expect(
+      service.updateSemester('semester-upcoming', {
+        status: SemesterStatus.ACTIVE,
+      }),
+    ).rejects.toThrow(ConflictException);
+  });
+
   it('returns active semester as current semester', async () => {
     semesterRepo.findOne
       .mockResolvedValueOnce({
@@ -1030,6 +1069,60 @@ describe('SemesterService', () => {
     expect(result.rows.some((row) => row.status === 'FAILED')).toBe(true);
   });
 
+  it('imports optional lecturer rows and assigns them to classes', async () => {
+    semesterRepo.findOne.mockResolvedValue({
+      id: 'semester-1',
+      code: 'SP26',
+      name: 'Spring 2026',
+      status: SemesterStatus.ACTIVE,
+    });
+    userRepo.find.mockResolvedValue([]);
+    classRepo.find.mockResolvedValue([
+      {
+        id: 'class-1',
+        code: 'SWP391',
+        name: 'Software Project',
+        semester: 'SP26',
+        lecturer_id: null,
+        lecturer: null,
+      },
+    ]);
+
+    const result = await service.processImport(
+      'semester-1',
+      'admin-1',
+      'import.xlsx',
+      [
+        {
+          row_number: 2,
+          semester_code: 'SP26',
+          role: 'LECTURER',
+          email: 'lecturer@fpt.edu.vn',
+          full_name: 'Lecturer One',
+          class_code: 'SWP391',
+          class_name: 'Software Project',
+          student_id: '',
+        },
+      ],
+      'IMPORT',
+    );
+
+    expect(userRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: 'lecturer@fpt.edu.vn',
+        full_name: 'Lecturer One',
+        role: Role.LECTURER,
+      }),
+    );
+    expect(classRepo.update).toHaveBeenCalledWith(
+      { id: 'class-1' },
+      { lecturer_id: 'user-lecturer@fpt.edu.vn' },
+    );
+    expect(result.summary.lecturers.created).toBe(1);
+    expect(result.summary.rows.success).toBe(1);
+    expect(result.rows[0].message).toContain('Lecturer assigned');
+  });
+
   it('rejects non-student identities in student rows', async () => {
     semesterRepo.findOne.mockResolvedValue({
       id: 'semester-1',
@@ -1045,7 +1138,15 @@ describe('SemesterService', () => {
         primary_provider: AuthProvider.EMAIL,
       },
     ]);
-    classRepo.find.mockResolvedValue([]);
+    classRepo.find.mockResolvedValue([
+      {
+        id: 'class-1',
+        code: 'SWP391',
+        name: 'Software Project',
+        semester: 'SP26',
+        lecturer_id: 'lecturer-1',
+      },
+    ]);
 
     const result = await service.processImport(
       'semester-1',

@@ -9,8 +9,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
 import { Repository } from 'typeorm';
-import { DocumentStatus } from '../../common/enums';
 import { ERROR_MESSAGES } from '../../common/constants';
+import { DocumentStatus, Role } from '../../common/enums';
 import { ClassMembership } from '../../entities/class-membership.entity';
 import { Class } from '../../entities/class.entity';
 import { DocumentSubmission } from '../../entities/document-submission.entity';
@@ -22,10 +22,7 @@ import { User } from '../../entities/user.entity';
 import { MailService } from '../mail/mail.service';
 import { classEnrollmentEmail } from '../mail/templates/class-enrollment';
 import { CreateClassDto } from './dto/create-class.dto';
-import {
-  ImportFailedRow,
-  ImportStudentsResponseDto,
-} from './dto/import-students-response.dto';
+import { ImportStudentsResponseDto } from './dto/import-students-response.dto';
 import { JoinClassDto } from './dto/join-class.dto';
 import { StudentRow } from './utils/file-parser.util';
 
@@ -69,12 +66,22 @@ export class ClassService {
     }
   }
 
-  async myClasses(studentId: string) {
+  async myClasses(userId: string, role: Role) {
+    if (role === Role.LECTURER) {
+      return this.classRepo.find({
+        where: { lecturer_id: userId },
+        order: { code: 'ASC' },
+      });
+    }
+
     const memberships = await this.classMembershipRepo.find({
-      where: { user_id: studentId },
+      where: { user_id: userId },
       relations: ['class'],
     });
-    return memberships.map((m) => m.class);
+
+    return memberships
+      .map((membership) => membership.class)
+      .filter((targetClass): targetClass is Class => !!targetClass);
   }
 
   async joinClass(studentId: string, classId: string, dto: JoinClassDto) {
