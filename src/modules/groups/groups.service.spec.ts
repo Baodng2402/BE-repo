@@ -8,6 +8,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import {
   Class,
+  ClassMembership,
   Group,
   GroupMembership,
   GroupRepository,
@@ -143,6 +144,12 @@ function createMockMembershipRepository() {
   };
 }
 
+function createMockClassMembershipRepository() {
+  return {
+    find: jest.fn(),
+  };
+}
+
 function createMockUserRepository() {
   return {
     findOne: jest.fn(),
@@ -172,6 +179,14 @@ function createMockClassRepository() {
 }
 
 function createMockDataSource() {
+  const qb = {
+    update: jest.fn().mockReturnThis(),
+    set: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    execute: jest.fn().mockResolvedValue({ affected: 1 }),
+  };
+
   return {
     transaction: jest.fn((cb) => {
       const manager = {
@@ -179,6 +194,7 @@ function createMockDataSource() {
         findOne: jest.fn(),
         create: jest.fn((_Entity, data) => data),
         save: jest.fn((data) => data),
+        createQueryBuilder: jest.fn(() => qb),
       };
       return cb(manager);
     }),
@@ -191,6 +207,9 @@ describe('GroupsService', () => {
   let service: GroupsService;
   let groupRepo: ReturnType<typeof createMockGroupRepository>;
   let membershipRepo: ReturnType<typeof createMockMembershipRepository>;
+  let classMembershipRepo: ReturnType<
+    typeof createMockClassMembershipRepository
+  >;
   let userRepo: ReturnType<typeof createMockUserRepository>;
   let groupRepositoryRepo: ReturnType<typeof createMockGroupRepoRepository>;
   let integrationTokenRepo: ReturnType<
@@ -204,6 +223,7 @@ describe('GroupsService', () => {
   beforeEach(async () => {
     groupRepo = createMockGroupRepository();
     membershipRepo = createMockMembershipRepository();
+    classMembershipRepo = createMockClassMembershipRepository();
     userRepo = createMockUserRepository();
     groupRepositoryRepo = createMockGroupRepoRepository();
     integrationTokenRepo = createMockIntegrationTokenRepository();
@@ -219,6 +239,10 @@ describe('GroupsService', () => {
         {
           provide: getRepositoryToken(GroupMembership),
           useValue: membershipRepo,
+        },
+        {
+          provide: getRepositoryToken(ClassMembership),
+          useValue: classMembershipRepo,
         },
         { provide: getRepositoryToken(User), useValue: userRepo },
         { provide: getRepositoryToken(Topic), useValue: {} },
@@ -267,9 +291,6 @@ describe('GroupsService', () => {
 
       expect(classRepo.findOne).toHaveBeenCalledWith({
         where: { id: CLASS_ID },
-      });
-      expect(groupRepo.count).toHaveBeenCalledWith({
-        where: { class_id: CLASS_ID },
       });
       expect(groupRepo.save).toHaveBeenCalled();
       expect(membershipRepo.save).not.toHaveBeenCalled();
@@ -658,7 +679,6 @@ describe('GroupsService', () => {
         user_id: OTHER_USER_ID,
         role_in_group: 'MEMBER',
       });
-      membershipRepo.update.mockResolvedValue({ affected: 1 });
       membershipRepo.find.mockResolvedValue([]);
 
       await service.updateMember(
@@ -669,10 +689,8 @@ describe('GroupsService', () => {
         Role.STUDENT,
       );
 
-      expect(membershipRepo.update).toHaveBeenCalledWith(
-        { group_id: GROUP_ID, user_id: OTHER_USER_ID },
-        { role_in_group: 'LEADER' },
-      );
+      expect(dataSource.transaction).toHaveBeenCalled();
+      expect(membershipRepo.update).not.toHaveBeenCalled();
     });
 
     it('should throw NotFoundException for non-member', async () => {

@@ -11,6 +11,8 @@ import {
   Class,
   ClassMembership,
   Conversation,
+  Group,
+  GroupMembership,
   Message,
   Semester,
   TeachingAssignment,
@@ -35,7 +37,9 @@ describe('ChatService', () => {
   let semesterRepository: ReturnType<typeof mockRepo>;
   let classRepository: ReturnType<typeof mockRepo>;
   let userRepository: ReturnType<typeof mockRepo>;
+  let groupRepository: ReturnType<typeof mockRepo>;
   let classMembershipRepository: ReturnType<typeof mockRepo>;
+  let groupMembershipRepository: ReturnType<typeof mockRepo>;
   let teachingAssignmentRepository: ReturnType<typeof mockRepo>;
 
   beforeEach(async () => {
@@ -44,7 +48,9 @@ describe('ChatService', () => {
     semesterRepository = mockRepo();
     classRepository = mockRepo();
     userRepository = mockRepo();
+    groupRepository = mockRepo();
     classMembershipRepository = mockRepo();
+    groupMembershipRepository = mockRepo();
     teachingAssignmentRepository = mockRepo();
 
     const module: TestingModule = await Test.createTestingModule({
@@ -58,9 +64,14 @@ describe('ChatService', () => {
         { provide: getRepositoryToken(Semester), useValue: semesterRepository },
         { provide: getRepositoryToken(Class), useValue: classRepository },
         { provide: getRepositoryToken(User), useValue: userRepository },
+        { provide: getRepositoryToken(Group), useValue: groupRepository },
         {
           provide: getRepositoryToken(ClassMembership),
           useValue: classMembershipRepository,
+        },
+        {
+          provide: getRepositoryToken(GroupMembership),
+          useValue: groupMembershipRepository,
         },
         {
           provide: getRepositoryToken(TeachingAssignment),
