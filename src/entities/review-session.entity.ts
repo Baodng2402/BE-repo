@@ -28,6 +28,12 @@ export interface ReviewSessionProblem {
   note: string | null;
 }
 
+export interface ReviewSessionAttendanceRecord {
+  user_id: string;
+  user_name: string | null;
+  present: boolean;
+}
+
 @Entity('ReviewSession')
 @Index('IDX_review_session_semester', ['semester_id'])
 @Index('IDX_review_session_class', ['class_id'])
@@ -62,7 +68,7 @@ export class ReviewSession {
   @Column({
     type: 'enum',
     enum: ReviewSessionStatus,
-    default: ReviewSessionStatus.COMPLETED,
+    default: ReviewSessionStatus.SCHEDULED,
   })
   status: ReviewSessionStatus;
 
@@ -81,8 +87,14 @@ export class ReviewSession {
   @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
   current_problems: ReviewSessionProblem[];
 
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
+  attendance_records: ReviewSessionAttendanceRecord[];
+
   @Column({ type: 'numeric', precision: 5, scale: 2, nullable: true })
   attendance_ratio: number | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  previous_session_id: string | null;
 
   @Column({ type: 'uuid', nullable: true })
   created_by_id: string | null;
@@ -110,6 +122,10 @@ export class ReviewSession {
   @ManyToOne(() => Group, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'group_id' })
   group: Group;
+
+  @ManyToOne(() => ReviewSession, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'previous_session_id' })
+  previous_session: ReviewSession | null;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'created_by_id' })

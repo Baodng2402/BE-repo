@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Equal, IsNull, LessThan, Not, Repository } from 'typeorm';
+import { Equal, In, IsNull, LessThan, Not, Repository } from 'typeorm';
 import { ERROR_MESSAGES } from '../../common/constants';
 import {
   ChatConversationStatus,
@@ -18,12 +18,15 @@ import {
   Class,
   ClassMembership,
   Conversation,
+  Group,
+  GroupMembership,
   Message,
   Semester,
   TeachingAssignment,
   User,
 } from '../../entities';
 import { GetOrCreateConversationDto } from './dto/get-or-create-conversation.dto';
+import { GetOrCreateGroupConversationDto } from './dto/get-or-create-group-conversation.dto';
 import { QueryChatMessagesDto } from './dto/query-chat-messages.dto';
 import { SendChatMessageDto } from './dto/send-chat-message.dto';
 
@@ -31,6 +34,13 @@ interface ConversationContext {
   semester: Semester;
   class: Class;
   student: User;
+  lecturer: User;
+}
+
+interface GroupConversationContext {
+  semester: Semester;
+  class: Class;
+  group: Group;
   lecturer: User;
 }
 
@@ -49,8 +59,12 @@ export class ChatService {
     private readonly classRepository: Repository<Class>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(Group)
+    private readonly groupRepository: Repository<Group>,
     @InjectRepository(ClassMembership)
     private readonly classMembershipRepository: Repository<ClassMembership>,
+    @InjectRepository(GroupMembership)
+    private readonly groupMembershipRepository: Repository<GroupMembership>,
     @InjectRepository(TeachingAssignment)
     private readonly teachingAssignmentRepository: Repository<TeachingAssignment>,
   ) {}
@@ -112,11 +126,28 @@ export class ChatService {
   }
 
   async listConversations(currentUserId: string) {
+    const memberGroupIds = await this.listActiveGroupIdsForUser(currentUserId);
+    const where:
+      | Array<{
+          student_id?: string;
+          lecturer_id?: string;
+          group_id?: ReturnType<typeof In<string>>;
+        }>
+      | {
+          student_id?: string;
+          lecturer_id?: string;
+        } = [{ student_id: currentUserId }, { lecturer_id: currentUserId }];
+
+    if (memberGroupIds.length > 0) {
+      where.push({ group_id: In(memberGroupIds) });
+    }
+
     const conversations = await this.conversationRepository.find({
-      where: [{ student_id: currentUserId }, { lecturer_id: currentUserId }],
+      where,
       relations: {
         semester: true,
         class: true,
+        group: true,
         student: true,
         lecturer: true,
       },
@@ -380,8 +411,24 @@ export class ChatService {
   }
 
   async listConversationIdsForUser(currentUserId: string) {
+    const memberGroupIds = await this.listActiveGroupIdsForUser(currentUserId);
+    const where:
+      | Array<{
+          student_id?: string;
+          lecturer_id?: string;
+          group_id?: ReturnType<typeof In<string>>;
+        }>
+      | {
+          student_id?: string;
+          lecturer_id?: string;
+        } = [{ student_id: currentUserId }, { lecturer_id: currentUserId }];
+
+    if (memberGroupIds.length > 0) {
+      where.push({ group_id: In(memberGroupIds) });
+    }
+
     const conversations = await this.conversationRepository.find({
-      where: [{ student_id: currentUserId }, { lecturer_id: currentUserId }],
+      where,
       select: { id: true },
     });
 
@@ -390,6 +437,74 @@ export class ChatService {
 
   async assertRealtimeAccess(currentUserId: string, conversationId: string) {
     return this.requireConversationAccess(currentUserId, conversationId);
+  }
+
+  async getOrCreateGroupConversation(
+    currentUserId: string,
+    currentUserRole: Role,
+    dto: GetOrCreateGroupConversationDto,
+  ) {
+    const context = await this.validateGroupConversationContext(
+      currentUserId,
+      currentUserRole,
+      dto,
+    );
+
+    const existing = await this.findGroupConversationByContext(
+      context.semester.id,
+      context.class.id,
+      context.group.id,
+      context.lecturer.id,
+    );
+
+    if (existing) {
+      return this.mapConversation(existing, currentUserId, null, 0);
+    }
+
+    let saved: Conversation;
+    try {
+      saved = await this.conversationRepository.save(
+        this.conversationRepository.create({
+          semester_id: context.semester.id,
+          class_id: context.class.id,
+          group_id: context.group.id,
+          lecturer_id: context.lecturer.id,
+          student_id: null,
+          status: ChatConversationStatus.ACTIVE,
+        }),
+      );
+    } catch (error) {
+      if (this.isUniqueViolation(error)) {
+        const concurrentExisting = await this.findGroupConversationByContext(
+          context.semester.id,
+          context.class.id,
+          context.group.id,
+          context.lecturer.id,
+        );
+        if (concurrentExisting) {
+          return this.mapConversation(
+            concurrentExisting,
+            currentUserId,
+            null,
+            0,
+          );
+        }
+      }
+      throw error;
+    }
+
+    const conversation = await this.conversationRepository.findOneOrFail({
+      where: { id: saved.id },
+      relations: {
+        semester: true,
+        class: true,
+        group: true,
+        student: true,
+        lecturer: true,
+      },
+    });
+
+    return this.mapConversation(conversation, currentUserId, null, 0);
   }
 
   private async validateConversationContext(
@@ -421,14 +536,14 @@ export class ChatService {
       );
     }
 
-    if (![Role.STUDENT, Role.GROUP_LEADER].includes(student.role as Role)) {
+    if (![Role.STUDENT, Role.GROUP_LEADER].includes(student.role)) {
       throw this.buildBadRequest(
         'CHAT_INVALID_CONTEXT',
         'student_id must belong to a student account.',
       );
     }
 
-    if ((lecturer.role as Role) !== Role.LECTURER) {
+    if (lecturer.role !== Role.LECTURER) {
       throw this.buildBadRequest(
         'CHAT_INVALID_CONTEXT',
         'lecturer_id must belong to a lecturer account.',
@@ -485,6 +600,7 @@ export class ChatService {
       relations: {
         semester: true,
         class: true,
+        group: true,
         student: true,
         lecturer: true,
       },
@@ -494,7 +610,15 @@ export class ChatService {
       throw this.buildNotFound();
     }
 
-    if (
+    if (conversation.group_id) {
+      const isGroupMember = await this.isActiveGroupMember(
+        conversation.group_id,
+        currentUserId,
+      );
+      if (conversation.lecturer_id !== currentUserId && !isGroupMember) {
+        throw this.buildForbidden();
+      }
+    } else if (
       conversation.student_id !== currentUserId &&
       conversation.lecturer_id !== currentUserId
     ) {
@@ -510,15 +634,21 @@ export class ChatService {
     lastMessage: Message | null,
     unreadCount: number,
   ) {
+    const isGroupRoom = !!conversation.group_id;
     const counterpart =
-      conversation.student_id === currentUserId
+      !isGroupRoom && conversation.student_id === currentUserId
         ? conversation.lecturer
-        : conversation.student;
+        : !isGroupRoom
+          ? conversation.student
+          : null;
 
     return {
       id: conversation.id,
       semester_id: conversation.semester_id,
       class_id: conversation.class_id,
+      group_id: conversation.group_id,
+      group_name: conversation.group?.name ?? null,
+      is_group_room: isGroupRoom,
       student_id: conversation.student_id,
       lecturer_id: conversation.lecturer_id,
       status: conversation.status,
@@ -526,12 +656,14 @@ export class ChatService {
       last_message_at: conversation.last_message_at,
       unread_count: unreadCount,
       last_message: lastMessage ? this.mapMessage(lastMessage) : null,
-      counterpart: {
-        id: counterpart.id,
-        email: counterpart.email,
-        full_name: counterpart.full_name,
-        role: counterpart.role,
-      },
+      counterpart: counterpart
+        ? {
+            id: counterpart.id,
+            email: counterpart.email,
+            full_name: counterpart.full_name,
+            role: counterpart.role,
+          }
+        : null,
       class_code: conversation.class.code,
       semester_name: conversation.semester.name,
       created_at: conversation.created_at,
@@ -588,10 +720,166 @@ export class ChatService {
       relations: {
         semester: true,
         class: true,
+        group: true,
         student: true,
         lecturer: true,
       },
     });
+  }
+
+  private async findGroupConversationByContext(
+    semesterId: string,
+    classId: string,
+    groupId: string,
+    lecturerId: string,
+  ) {
+    return this.conversationRepository.findOne({
+      where: {
+        semester_id: semesterId,
+        class_id: classId,
+        group_id: groupId,
+        lecturer_id: lecturerId,
+      },
+      relations: {
+        semester: true,
+        class: true,
+        group: true,
+        student: true,
+        lecturer: true,
+      },
+    });
+  }
+
+  private async validateGroupConversationContext(
+    currentUserId: string,
+    currentUserRole: Role,
+    dto: GetOrCreateGroupConversationDto,
+  ): Promise<GroupConversationContext> {
+    const [semester, cls, group] = await Promise.all([
+      this.semesterRepository.findOne({ where: { id: dto.semester_id } }),
+      this.classRepository.findOne({ where: { id: dto.class_id } }),
+      this.groupRepository.findOne({ where: { id: dto.group_id } }),
+    ]);
+
+    if (!semester || !cls || !group) {
+      throw this.buildBadRequest(
+        'CHAT_INVALID_CONTEXT',
+        ERROR_MESSAGES.CHAT.INVALID_CONTEXT,
+      );
+    }
+
+    if (cls.semester !== semester.code || group.class_id !== cls.id) {
+      throw this.buildBadRequest(
+        'CHAT_INVALID_CONTEXT',
+        ERROR_MESSAGES.CHAT.INVALID_CONTEXT,
+      );
+    }
+
+    const teachingAssignments = await this.teachingAssignmentRepository.find({
+      where: {
+        semester_id: semester.id,
+        class_id: cls.id,
+      },
+      select: { lecturer_id: true },
+    });
+    const assignedLecturerIds = new Set(
+      teachingAssignments.map((item) => item.lecturer_id),
+    );
+    if (cls.lecturer_id) {
+      assignedLecturerIds.add(cls.lecturer_id);
+    }
+
+    if (currentUserRole === Role.LECTURER) {
+      if (dto.lecturer_id && dto.lecturer_id !== currentUserId) {
+        throw this.buildForbidden();
+      }
+      if (!assignedLecturerIds.has(currentUserId)) {
+        throw this.buildForbidden();
+      }
+
+      const lecturer = await this.userRepository.findOne({
+        where: { id: currentUserId },
+      });
+      if (!lecturer || lecturer.role !== Role.LECTURER) {
+        throw this.buildForbidden();
+      }
+
+      return {
+        semester,
+        class: cls,
+        group,
+        lecturer,
+      };
+    }
+
+    if (![Role.STUDENT, Role.GROUP_LEADER].includes(currentUserRole)) {
+      throw this.buildForbidden();
+    }
+
+    const membership = await this.groupMembershipRepository.findOne({
+      where: {
+        group_id: group.id,
+        user_id: currentUserId,
+        left_at: IsNull(),
+      },
+    });
+
+    if (!membership) {
+      throw this.buildForbidden();
+    }
+
+    const targetLecturerId =
+      dto.lecturer_id || [...assignedLecturerIds.values()][0];
+
+    if (!targetLecturerId || !assignedLecturerIds.has(targetLecturerId)) {
+      throw this.buildBadRequest(
+        'CHAT_INVALID_CONTEXT',
+        ERROR_MESSAGES.CHAT.INVALID_CONTEXT,
+      );
+    }
+
+    const lecturer = await this.userRepository.findOne({
+      where: { id: targetLecturerId },
+    });
+
+    if (!lecturer || lecturer.role !== Role.LECTURER) {
+      throw this.buildBadRequest(
+        'CHAT_INVALID_CONTEXT',
+        ERROR_MESSAGES.CHAT.INVALID_CONTEXT,
+      );
+    }
+
+    return {
+      semester,
+      class: cls,
+      group,
+      lecturer,
+    };
+  }
+
+  private async listActiveGroupIdsForUser(userId: string) {
+    const memberships = await this.groupMembershipRepository.find({
+      where: {
+        user_id: userId,
+        left_at: IsNull(),
+      },
+      select: { group_id: true },
+    });
+
+    return memberships.map((membership) => membership.group_id);
+  }
+
+  private async isActiveGroupMember(groupId: string, userId: string) {
+    const membership = await this.groupMembershipRepository.findOne({
+      where: {
+        group_id: groupId,
+        user_id: userId,
+        left_at: IsNull(),
+      },
+      select: { user_id: true },
+    });
+
+    return !!membership;
   }
 
   private isUniqueViolation(error: unknown) {

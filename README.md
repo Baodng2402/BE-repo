@@ -829,3 +829,12 @@ Read flow for mobile:
 - Use `client_id` per outbound message to avoid duplicate sends after retry.
 - Use `PATCH /api/chat/conversations/:id/read` as the main read API.
 - Do not assume the client can create arbitrary conversations; server validates semester/class/student/lecturer context strictly.
+
+## Review Session attendance tracking & problem carryover
+
+- ReviewSession now supports per-student ttendance_records plus derived ttendance_ratio.
+- New sessions default to SCHEDULED.
+- When a lecturer creates a new review session, unresolved 
+ot-done problems from the latest previous session of the same group are carried forward automatically.
+- Checkpoint auto scoring now includes attendance derived from ttendance_records when present; older sessions without that field remain backward-compatible via the stored ttendance_ratio.
+- Review session edits/deletes are tracked through ReviewSessionAuditLog, and version history can be queried by group and milestone.

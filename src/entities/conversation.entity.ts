@@ -12,6 +12,7 @@ import {
 } from 'typeorm';
 import { ChatConversationStatus } from '../common/enums';
 import { Class } from './class.entity';
+import { Group } from './group.entity';
 import { Message } from './message.entity';
 import { Semester } from './semester.entity';
 import { User } from './user.entity';
@@ -25,6 +26,7 @@ import { User } from './user.entity';
 ])
 @Index('IDX_conversation_student_updated_at', ['student_id', 'updated_at'])
 @Index('IDX_conversation_lecturer_updated_at', ['lecturer_id', 'updated_at'])
+@Index('IDX_conversation_group_updated_at', ['group_id', 'updated_at'])
 export class Conversation {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -35,8 +37,11 @@ export class Conversation {
   @Column({ type: 'uuid' })
   class_id: string;
 
-  @Column({ type: 'uuid' })
-  student_id: string;
+  @Column({ type: 'uuid', nullable: true })
+  student_id: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  group_id: string | null;
 
   @Column({ type: 'uuid' })
   lecturer_id: string;
@@ -71,10 +76,15 @@ export class Conversation {
   class: Class;
 
   @ManyToOne(() => User, (user) => user.student_conversations, {
-    onDelete: 'CASCADE',
+    onDelete: 'SET NULL',
+    nullable: true,
   })
   @JoinColumn({ name: 'student_id' })
-  student: User;
+  student: User | null;
+
+  @ManyToOne(() => Group, { onDelete: 'CASCADE', nullable: true })
+  @JoinColumn({ name: 'group_id' })
+  group: Group | null;
 
   @ManyToOne(() => User, (user) => user.lecturer_conversations, {
     onDelete: 'CASCADE',

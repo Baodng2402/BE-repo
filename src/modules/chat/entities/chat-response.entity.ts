@@ -59,7 +59,16 @@ export class ChatConversationEntity {
   class_id: string;
 
   @ApiProperty({ example: 'student-uuid' })
-  student_id: string;
+  student_id: string | null;
+
+  @ApiPropertyOptional({ example: 'group-uuid', nullable: true })
+  group_id?: string | null;
+
+  @ApiPropertyOptional({ example: 'Group 1', nullable: true })
+  group_name?: string | null;
+
+  @ApiProperty({ example: false })
+  is_group_room: boolean;
 
   @ApiProperty({ example: 'lecturer-uuid' })
   lecturer_id: string;
@@ -82,8 +91,8 @@ export class ChatConversationEntity {
   @ApiPropertyOptional({ type: ChatMessageEntity, nullable: true })
   last_message?: ChatMessageEntity | null;
 
-  @ApiProperty({ type: ChatParticipantEntity })
-  counterpart: ChatParticipantEntity;
+  @ApiPropertyOptional({ type: ChatParticipantEntity, nullable: true })
+  counterpart?: ChatParticipantEntity | null;
 
   @ApiProperty({ example: 'SEP490_G1' })
   class_code: string;

@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsNumber,
@@ -38,6 +39,22 @@ export class ReviewSessionProblemDto {
   @IsString()
   @MaxLength(1000)
   note?: string;
+}
+
+export class ReviewSessionAttendanceRecordDto {
+  @ApiProperty({ example: 'student-1' })
+  @IsString()
+  user_id: string;
+
+  @ApiPropertyOptional({ example: 'Nguyen Van A' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  user_name?: string;
+
+  @ApiProperty({ example: true })
+  @IsBoolean()
+  present: boolean;
 }
 
 export class CreateReviewSessionDto {
@@ -117,6 +134,21 @@ export class CreateReviewSessionDto {
   @Min(0)
   @Max(1)
   attendance_ratio?: number;
+
+  @ApiPropertyOptional({
+    type: [ReviewSessionAttendanceRecordDto],
+    example: [
+      { user_id: 'student-1', user_name: 'Nguyen Van A', present: true },
+      { user_id: 'student-2', user_name: 'Tran Thi B', present: false },
+    ],
+    description:
+      'Per-student attendance for this review session. Used to derive attendance_ratio when provided.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ReviewSessionAttendanceRecordDto)
+  attendance_records?: ReviewSessionAttendanceRecordDto[];
 
   @ApiPropertyOptional({
     type: 'array',

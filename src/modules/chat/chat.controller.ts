@@ -22,9 +22,13 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { Role } from '../../common/enums';
 import type { AuthorizedRequest } from '../auth/auth.controller';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ChatSendRateLimitGuard } from './chat-rate-limit.service';
+import { ChatService } from './chat.service';
 import { GetOrCreateConversationDto } from './dto/get-or-create-conversation.dto';
+import { GetOrCreateGroupConversationDto } from './dto/get-or-create-group-conversation.dto';
 import { QueryChatMessagesDto } from './dto/query-chat-messages.dto';
 import { SendChatMessageDto } from './dto/send-chat-message.dto';
 import {
@@ -34,9 +38,6 @@ import {
   ChatMessageListEntity,
   ChatReadReceiptEntity,
 } from './entities/chat-response.entity';
-import { ChatSendRateLimitGuard } from './chat-rate-limit.service';
-import { ChatService } from './chat.service';
-import { Role } from '../../common/enums';
 
 @ApiTags('Chat')
 @ApiBearerAuth()
@@ -76,6 +77,34 @@ export class ChatController {
     @Body() dto: GetOrCreateConversationDto,
   ) {
     return this.chatService.getOrCreateConversation(
+      req.user.id,
+      req.user.role as Role,
+      dto,
+    );
+  }
+
+  @Post('group-conversations')
+  @ApiOperation({
+    summary: 'Get or create a group-room chat conversation (1 room per group)',
+  })
+  @ApiBody({
+    type: GetOrCreateGroupConversationDto,
+    examples: {
+      lecturerOpensGroupRoom: {
+        value: {
+          semester_id: '11111111-1111-1111-1111-111111111111',
+          class_id: '22222222-2222-2222-2222-222222222222',
+          group_id: '33333333-3333-3333-3333-333333333333',
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 201, type: ChatConversationEntity })
+  async getOrCreateGroupConversation(
+    @Req() req: AuthorizedRequest,
+    @Body() dto: GetOrCreateGroupConversationDto,
+  ) {
+    return this.chatService.getOrCreateGroupConversation(
       req.user.id,
       req.user.role as Role,
       dto,

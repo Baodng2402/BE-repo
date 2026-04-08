@@ -29,6 +29,20 @@ import { User } from '../entities/user.entity';
 
 const ADMIN_LECTURER_SEED_PASSWORD = '123123123';
 const STUDENT_SEED_PASSWORD = 'password123';
+const ASSIGNED_STUDENTS_PER_GROUP = 3;
+const STUDENT_COUNT = 35;
+
+function getSeedStudentEmail(index: number) {
+  if (index === 1) {
+    return 'tommydao2000@gmail.com';
+  }
+
+  if (index === 2 && process.env.SEED_STUDENT_2_EMAIL?.trim()) {
+    return process.env.SEED_STUDENT_2_EMAIL.trim().toLowerCase();
+  }
+
+  return `student${index}@edu.vn`;
+}
 
 async function hashPassword(plainTextPassword: string) {
   const salt = await bcrypt.genSalt();
@@ -38,9 +52,15 @@ async function hashPassword(plainTextPassword: string) {
 async function bootstrap() {
   const app = await NestFactory.createApplicationContext(AppModule);
   const dataSource = app.get(DataSource);
+  const shouldClean = process.env.SEED_CLEAN === 'true';
 
   console.log('Synchronizing database schema...');
-  await dataSource.synchronize(false); // don't drop tables, just sync
+  await dataSource.synchronize(shouldClean);
+  if (shouldClean) {
+    console.log(
+      'SEED_CLEAN=true detected - database schema recreated from entities.',
+    );
+  }
 
   const userRepository = dataSource.getRepository(User);
   const semesterRepository = dataSource.getRepository(Semester);
@@ -98,15 +118,25 @@ async function bootstrap() {
   await userRepository.save(lecturer);
 
   console.log('Seeding 35 Students...');
-  for (let i = 1; i <= 35; i++) {
-    const email = `student${i}@edu.vn`;
+  const seedStudents = Array.from({ length: STUDENT_COUNT }).map((_, index) => {
+    const studentNumber = index + 1;
+    return {
+      number: studentNumber,
+      email: getSeedStudentEmail(studentNumber),
+      full_name: `Student ${studentNumber}`,
+      student_id: `HE1500${studentNumber.toString().padStart(2, '0')}`,
+    };
+  });
+
+  for (const seedStudent of seedStudents) {
+    const email = seedStudent.email;
     const existing = await userRepository.findOne({ where: { email } });
     if (!existing) {
       const passwordHash = await hashPassword(STUDENT_SEED_PASSWORD);
       const student = userRepository.create({
         email,
-        full_name: `Student ${i}`,
-        student_id: `HE1500${i.toString().padStart(2, '0')}`,
+        full_name: seedStudent.full_name,
+        student_id: seedStudent.student_id,
         password_hash: passwordHash,
         role: Role.STUDENT,
         primary_provider: AuthProvider.EMAIL,
@@ -172,9 +202,7 @@ async function bootstrap() {
   }
 
   const seededStudents = await userRepository.find({
-    where: Array.from({ length: 35 }).map((_, index) => ({
-      email: `student${index + 1}@edu.vn`,
-    })),
+    where: seedStudents.map((student) => ({ email: student.email })),
   });
 
   seededStudents.sort((first, second) =>
@@ -206,8 +234,14 @@ async function bootstrap() {
     throw new Error('Demo groups are missing. Cannot continue seeding.');
   }
 
-  for (let index = 0; index < seededStudents.length; index++) {
-    const student = seededStudents[index];
+  const assignedStudentCount = Math.min(
+    seededStudents.length,
+    demoGroups.length * ASSIGNED_STUDENTS_PER_GROUP,
+  );
+  const studentsToAssign = seededStudents.slice(0, assignedStudentCount);
+
+  for (let index = 0; index < studentsToAssign.length; index++) {
+    const student = studentsToAssign[index];
     const targetGroup = demoGroups[index % demoGroups.length];
     const desiredRole =
       index < demoGroups.length ? MembershipRole.LEADER : MembershipRole.MEMBER;
@@ -235,7 +269,9 @@ async function bootstrap() {
     existingGroupMembership.left_at = null;
     await groupMembershipRepository.save(existingGroupMembership);
   }
-  console.log('Assigned demo students into 7 groups with designated leaders');
+  console.log(
+    `Assigned ${studentsToAssign.length} demo students into ${demoGroups.length} groups and kept ${seededStudents.length - studentsToAssign.length} students without groups.`,
+  );
 
   for (const [groupIndex, group] of demoGroups.entries()) {
     const activeMembers = await groupMembershipRepository.find({

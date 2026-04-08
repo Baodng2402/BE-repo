@@ -5,19 +5,21 @@ import {
   Class,
   ClassMembership,
   Conversation,
+  Group,
+  GroupMembership,
   Message,
   Semester,
   TeachingAssignment,
   User,
 } from '../../entities';
-import { ChatController } from './chat.controller';
-import { ChatGateway } from './chat.gateway';
 import {
   ChatRateLimitService,
   ChatSendRateLimitGuard,
 } from './chat-rate-limit.service';
-import { ChatService } from './chat.service';
 import { ChatSocketAuthService } from './chat-socket-auth.service';
+import { ChatController } from './chat.controller';
+import { ChatGateway } from './chat.gateway';
+import { ChatService } from './chat.service';
 
 @Module({
   imports: [
@@ -27,8 +29,10 @@ import { ChatSocketAuthService } from './chat-socket-auth.service';
       Message,
       Semester,
       Class,
+      Group,
       User,
       ClassMembership,
+      GroupMembership,
       TeachingAssignment,
     ]),
   ],

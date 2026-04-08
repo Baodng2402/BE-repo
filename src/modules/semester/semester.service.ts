@@ -40,13 +40,17 @@ import {
   TeachingAssignment,
   User,
 } from '../../entities';
-import { ReviewSession } from '../../entities/review-session.entity';
+import {
+  ReviewSession,
+  ReviewSessionAttendanceRecord,
+} from '../../entities/review-session.entity';
 import { ClassCheckpointService } from '../class/class-checkpoint.service';
 import { GithubService } from '../github/github.service';
 import { BulkExaminerAssignmentDto } from './dto/bulk-examiner-assignment.dto';
 import { BulkTeachingAssignmentDto } from './dto/bulk-teaching-assignment.dto';
 import {
   CreateReviewSessionDto,
+  ReviewSessionAttendanceRecordDto,
   ReviewSessionProblemDto,
 } from './dto/create-review-session.dto';
 import { CreateSemesterClassDto } from './dto/create-semester-class.dto';
@@ -96,6 +100,12 @@ export interface ReviewSessionParticipantSummary {
   note: string | null;
 }
 
+export interface ReviewSessionAttendanceSummary {
+  user_id: string;
+  user_name: string | null;
+  present: boolean;
+}
+
 export interface ReviewSessionTimelineItem {
   id: string;
   title: string;
@@ -108,6 +118,8 @@ export interface ReviewSessionTimelineItem {
   next_plan_until_next_review: string | null;
   previous_problem_followup: string | null;
   attendance_ratio: number | null;
+  attendance_records: ReviewSessionAttendanceSummary[];
+  previous_session_id: string | null;
   current_problems: ReviewSessionParticipantSummary[];
   version_count?: number;
   latest_action?: ReviewSessionAuditAction | null;
@@ -743,7 +755,7 @@ export class SemesterService {
             where: {
               class_id: In(visibleClasses.map((targetClass) => targetClass.id)),
             },
-            relations: ['topic'],
+            relations: ['topic', 'members', 'members.user'],
             order: { created_at: 'ASC' },
           })
         : [];
@@ -979,7 +991,20 @@ export class SemesterService {
       'write',
     );
     const reviewDay = this.toHoChiMinhReviewDay(dto.review_date);
-    const normalizedProblems = this.normalizeReviewProblems(dto.current_problems);
+    const groupMembers = await this.getActiveGroupAttendanceMembers(group.id);
+    const previousSession = await this.getLatestReviewSessionForCarryover(
+      semester.id,
+      group.id,
+      dto.review_date,
+    );
+    const normalizedProblems = this.mergeCarriedProblems(
+      previousSession,
+      dto.current_problems,
+    );
+    const attendanceRecords = this.normalizeAttendanceRecords(
+      dto.attendance_records,
+      groupMembers,
+    );
 
     await this.ensureMilestoneConfiguredForClass(
       semester.id,
@@ -997,7 +1022,7 @@ export class SemesterService {
         milestone_code: dto.milestone_code,
         review_date: new Date(dto.review_date),
         title: dto.title.trim(),
-        status: dto.status ?? ReviewSessionStatus.COMPLETED,
+        status: dto.status ?? ReviewSessionStatus.SCHEDULED,
         lecturer_note: dto.lecturer_note?.trim() || null,
         what_done_since_last_review:
           dto.what_done_since_last_review?.trim() || null,
@@ -1006,10 +1031,14 @@ export class SemesterService {
         previous_problem_followup:
           dto.previous_problem_followup?.trim() || null,
         current_problems: normalizedProblems,
+        attendance_records: attendanceRecords,
         attendance_ratio:
-          dto.attendance_ratio !== undefined
-            ? Number(dto.attendance_ratio.toFixed(2))
-            : null,
+          attendanceRecords.length > 0
+            ? this.calculateAttendanceRatio(attendanceRecords)
+            : dto.attendance_ratio !== undefined
+              ? Number(dto.attendance_ratio.toFixed(2))
+              : null,
+        previous_session_id: previousSession?.id ?? null,
         created_by_id: userId,
         updated_by_id: userId,
       }),
@@ -1094,7 +1123,17 @@ export class SemesterService {
     if (dto.current_problems !== undefined) {
       session.current_problems = this.normalizeReviewProblems(dto.current_problems);
     }
-    if (dto.attendance_ratio !== undefined) {
+    if (dto.attendance_records !== undefined) {
+      const groupMembers = await this.getActiveGroupAttendanceMembers(group.id);
+      session.attendance_records = this.normalizeAttendanceRecords(
+        dto.attendance_records,
+        groupMembers,
+      );
+      session.attendance_ratio = this.calculateAttendanceRatio(
+        session.attendance_records,
+      );
+    }
+    if (dto.attendance_records === undefined && dto.attendance_ratio !== undefined) {
       session.attendance_ratio =
         dto.attendance_ratio !== null
           ? Number(dto.attendance_ratio.toFixed(2))
@@ -2883,6 +2922,11 @@ export class SemesterService {
   private serializeReviewGroup(
     group: Pick<Group, 'id' | 'name' | 'project_name'> & {
       topic?: { name?: string | null } | null;
+      members?: Array<
+        Pick<GroupMembership, 'user_id' | 'left_at'> & {
+          user?: Pick<User, 'full_name' | 'email'> | null;
+        }
+      >;
     },
     review: GroupReview | undefined,
     milestone: ReviewMilestoneContext | null,
@@ -2922,6 +2966,13 @@ export class SemesterService {
             override_reason: null,
           },
       lecturer_note: showScores ? (review?.lecturer_note ?? null) : null,
+      members:
+        group.members
+          ?.filter((member) => !member.left_at)
+          .map((member) => ({
+            user_id: member.user_id,
+            user_name: member.user?.full_name ?? member.user?.email ?? null,
+          })) ?? [],
       scoring: showScores
         ? {
             formula: review?.scoring_formula ?? null,
@@ -2990,10 +3041,13 @@ export class SemesterService {
       what_done_since_last_review: session.what_done_since_last_review,
       next_plan_until_next_review: session.next_plan_until_next_review,
       previous_problem_followup: session.previous_problem_followup,
-      attendance_ratio:
-        session.attendance_ratio !== null && session.attendance_ratio !== undefined
-          ? Number(session.attendance_ratio)
-          : null,
+      attendance_ratio: this.getAttendanceRatioFromSession(session),
+      attendance_records: (session.attendance_records || []).map((record) => ({
+        user_id: record.user_id,
+        user_name: record.user_name ?? null,
+        present: !!record.present,
+      })),
+      previous_session_id: session.previous_session_id ?? null,
       current_problems: problems.map((problem) => ({
         id: problem.id,
         title: problem.title,
@@ -3004,21 +3058,11 @@ export class SemesterService {
   }
 
   private buildReviewSessionAggregate(reviewSessions: ReviewSession[]) {
-    const attendanceValues = reviewSessions
-      .map((session) =>
-        session.attendance_ratio !== null && session.attendance_ratio !== undefined
-          ? Number(session.attendance_ratio)
-          : null,
-      )
-      .filter((value): value is number => value !== null);
-    const presentCount = attendanceValues.reduce(
-      (sum, ratio) => sum + Math.round(ratio * 100),
-      0,
+    const attendanceRecords = reviewSessions.flatMap(
+      (session) => (session.attendance_records || []) as ReviewSessionAttendanceRecord[],
     );
-    const absentCount = attendanceValues.reduce(
-      (sum, ratio) => sum + Math.round((1 - ratio) * 100),
-      0,
-    );
+    const presentCount = attendanceRecords.filter((record) => record.present).length;
+    const absentCount = attendanceRecords.filter((record) => !record.present).length;
     const contributorCount = reviewSessions.reduce((sum, session) => {
       return (
         sum +
@@ -3181,6 +3225,135 @@ export class SemesterService {
     }).format(new Date(reviewDate));
   }
 
+  private async getLatestReviewSessionForCarryover(
+    semesterId: string,
+    groupId: string,
+    reviewDate: string,
+    excludeSessionId?: string,
+  ) {
+    const sessions = await this.reviewSessionRepository.find({
+      where: {
+        semester_id: semesterId,
+        group_id: groupId,
+        deleted_at: IsNull(),
+      },
+      order: { review_date: 'DESC', created_at: 'DESC' },
+    });
+
+    const targetTime = new Date(reviewDate).getTime();
+
+    return (
+      sessions.find(
+        (session) =>
+          session.id !== excludeSessionId &&
+          new Date(session.review_date).getTime() < targetTime,
+      ) ?? null
+    );
+  }
+
+  private async getActiveGroupAttendanceMembers(groupId: string) {
+    const memberships = await this.groupMembershipRepository.find({
+      where: {
+        group_id: groupId,
+        left_at: IsNull(),
+      },
+      relations: ['user'],
+      order: { joined_at: 'ASC' },
+    });
+
+    return memberships.map((membership) => ({
+      user_id: membership.user_id,
+      user_name: membership.user?.full_name ?? membership.user?.email ?? null,
+    }));
+  }
+
+  private mergeCarriedProblems(
+    previousSession: ReviewSession | null,
+    incomingProblems: ReviewSessionProblemDto[] | undefined,
+  ) {
+    const normalizedIncoming = this.normalizeReviewProblems(incomingProblems);
+    const normalizedKeys = new Set(
+      normalizedIncoming.map((problem) =>
+        `${problem.id}:${problem.title.trim().toLowerCase()}`,
+      ),
+    );
+
+    const carriedProblems = ((previousSession?.current_problems ||
+      []) as Array<{
+      id: string;
+      title: string;
+      status: ReviewProblemStatus;
+      note: string | null;
+    }>)
+      .filter((problem) => problem.status === ReviewProblemStatus.NOT_DONE)
+      .map((problem) => ({
+        id: problem.id?.trim() || randomUUID(),
+        title: problem.title.trim(),
+        status: ReviewProblemStatus.NOT_DONE,
+        note: problem.note?.trim() || null,
+      }))
+      .filter((problem) => {
+        const key = `${problem.id}:${problem.title.toLowerCase()}`;
+        return !normalizedKeys.has(key);
+      });
+
+    return [...carriedProblems, ...normalizedIncoming];
+  }
+
+  private normalizeAttendanceRecords(
+    records: ReviewSessionAttendanceRecordDto[] | undefined,
+    members: Array<{ user_id: string; user_name: string | null }>,
+  ): ReviewSessionAttendanceRecord[] {
+    if (!records) {
+      return [];
+    }
+
+    const recordByUserId = new Map(
+      records.map((record) => [record.user_id, record]),
+    );
+
+    for (const record of records) {
+      if (!members.some((member) => member.user_id === record.user_id)) {
+        throw new BadRequestException(
+          'Attendance can only be recorded for active group members.',
+        );
+      }
+    }
+
+    return members.map((member) => ({
+      user_id: member.user_id,
+      user_name:
+        recordByUserId.get(member.user_id)?.user_name?.trim() ||
+        member.user_name ||
+        null,
+      present: !!recordByUserId.get(member.user_id)?.present,
+    }));
+  }
+
+  private calculateAttendanceRatio(records: ReviewSessionAttendanceRecord[]) {
+    if (!records.length) {
+      return 0;
+    }
+
+    return Number(
+      (
+        records.filter((record) => record.present).length / records.length
+      ).toFixed(2),
+    );
+  }
+
+  private getAttendanceRatioFromSession(session: ReviewSession) {
+    const records = (session.attendance_records ||
+      []) as ReviewSessionAttendanceRecord[];
+    if (records.length > 0) {
+      return this.calculateAttendanceRatio(records);
+    }
+
+    return session.attendance_ratio !== null && session.attendance_ratio !== undefined
+      ? Number(session.attendance_ratio)
+      : null;
+  }
+
   private normalizeReviewProblems(
     problems: ReviewSessionProblemDto[] | undefined,
   ): Array<{
@@ -3258,10 +3431,9 @@ export class SemesterService {
       next_plan_until_next_review: session.next_plan_until_next_review,
       previous_problem_followup: session.previous_problem_followup,
       current_problems: session.current_problems,
-      attendance_ratio:
-        session.attendance_ratio !== null && session.attendance_ratio !== undefined
-          ? Number(session.attendance_ratio)
-          : null,
+      attendance_records: session.attendance_records ?? [],
+      attendance_ratio: this.getAttendanceRatioFromSession(session),
+      previous_session_id: session.previous_session_id ?? null,
       deleted_at: session.deleted_at?.toISOString() ?? null,
       updated_by_id: session.updated_by_id,
     };
@@ -3355,11 +3527,7 @@ export class SemesterService {
         problem.status === ReviewProblemStatus.ARCHIVED,
     ).length;
     const attendanceRatios = reviewSessions
-      .map((session) =>
-        session.attendance_ratio !== null && session.attendance_ratio !== undefined
-          ? Number(session.attendance_ratio)
-          : null,
-      )
+      .map((session) => this.getAttendanceRatioFromSession(session))
       .filter((value): value is number => value !== null);
 
     return {

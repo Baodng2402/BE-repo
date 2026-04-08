@@ -162,6 +162,7 @@ describe('SemesterService', () => {
       ...entity,
     }));
     reviewSessionRepo.find.mockResolvedValue([]);
+    groupMembershipRepo.find.mockResolvedValue([]);
     configService.get.mockImplementation((key: string) => {
       switch (key) {
         case 'DEMO_WEEK_OVERRIDE_ENABLED':
@@ -1018,6 +1019,7 @@ describe('SemesterService', () => {
     );
 
     expect(created.review_day).toBe('2026-03-12');
+    expect(created.status).toBe(ReviewSessionStatus.SCHEDULED);
     expect(reviewSessionAuditLogRepo.save).toHaveBeenCalled();
 
     reviewSessionRepo.findOne.mockResolvedValueOnce({
@@ -1035,6 +1037,182 @@ describe('SemesterService', () => {
         current_problems: [],
       }),
     ).rejects.toThrow(ConflictException);
+  });
+
+  it('auto-carries not-done problems from the previous review session', async () => {
+    semesterRepo.findOne.mockResolvedValue({
+      id: 'semester-1',
+      code: 'SP26',
+      name: 'Spring 2026',
+      status: SemesterStatus.ACTIVE,
+      current_week: 4,
+      start_date: '2026-01-01',
+      end_date: '2026-05-01',
+    });
+    groupRepo.findOne.mockResolvedValue({
+      id: 'group-1',
+      class_id: 'class-1',
+      name: 'Group 1',
+      class: {
+        id: 'class-1',
+        code: 'SWP391',
+        name: 'Software Project',
+        semester: 'SP26',
+        lecturer_id: 'lecturer-1',
+      },
+    });
+    groupMembershipRepo.find.mockResolvedValue([
+      {
+        group_id: 'group-1',
+        user_id: 'student-1',
+        left_at: null,
+        user: { id: 'student-1', full_name: 'Nguyen Van A', email: 'a@fpt.edu.vn' },
+      },
+      {
+        group_id: 'group-1',
+        user_id: 'student-2',
+        left_at: null,
+        user: { id: 'student-2', full_name: 'Tran Thi B', email: 'b@fpt.edu.vn' },
+      },
+    ]);
+    reviewSessionRepo.find.mockResolvedValue([
+      {
+        id: 'session-prev',
+        semester_id: 'semester-1',
+        group_id: 'group-1',
+        review_date: new Date('2026-03-10T09:00:00.000Z'),
+        current_problems: [
+          {
+            id: 'problem-1',
+            title: 'Jira permissions still blocked',
+            status: ReviewProblemStatus.NOT_DONE,
+            note: 'Need admin scope fix',
+          },
+          {
+            id: 'problem-2',
+            title: 'Old resolved blocker',
+            status: ReviewProblemStatus.DONE,
+            note: 'Already resolved',
+          },
+        ],
+      },
+    ]);
+    reviewSessionRepo.findOne.mockResolvedValue(null);
+    reviewSessionRepo.save.mockImplementation(async (entity) => ({
+      id: 'session-new',
+      ...entity,
+    }));
+
+    const created = await service.createReviewSession(
+      'group-1',
+      'lecturer-1',
+      Role.LECTURER,
+      {
+        milestone_code: ReviewMilestoneCode.REVIEW_1,
+        review_date: '2026-03-12T09:00:00.000Z',
+        title: 'Follow-up review',
+        current_problems: [
+          {
+            title: 'Need deployment rehearsal',
+            status: ReviewProblemStatus.NOT_DONE,
+            note: 'Schedule before demo',
+          },
+        ],
+        attendance_records: [
+          { user_id: 'student-1', present: true },
+          { user_id: 'student-2', present: false },
+        ],
+      },
+    );
+
+    expect(created.previous_session_id).toBe('session-prev');
+    expect(created.current_problems).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: 'Jira permissions still blocked' }),
+        expect.objectContaining({ title: 'Need deployment rehearsal' }),
+      ]),
+    );
+    expect(created.current_problems).toHaveLength(2);
+    expect(created.attendance_ratio).toBe(0.5);
+    expect(created.attendance_records).toHaveLength(2);
+  });
+
+  it('uses per-student attendance records in checkpoint scoring metrics', async () => {
+    semesterRepo.findOne.mockResolvedValueOnce({
+      id: 'semester-1',
+      code: 'SP26',
+      name: 'Spring 2026',
+      status: SemesterStatus.ACTIVE,
+      current_week: 7,
+      start_date: '2026-01-01',
+      end_date: '2026-05-01',
+    });
+    groupRepo.findOne.mockResolvedValue({
+      id: 'group-1',
+      class_id: 'class-1',
+      name: 'Group 1',
+      project_name: 'Project One',
+      topic: null,
+      class: {
+        id: 'class-1',
+        lecturer_id: 'lecturer-1',
+        code: 'SWP391',
+        name: 'Software Project',
+        semester: 'SP26',
+      },
+    });
+    taskRepo.find.mockResolvedValue([
+      { id: 'task-1', status: 'DONE', due_at: null },
+      { id: 'task-2', status: 'TODO', due_at: null },
+    ]);
+    groupRepoLinkRepo.findOne
+      .mockResolvedValueOnce({
+        group_id: 'group-1',
+        repo_owner: 'org',
+        repo_name: 'repo',
+        added_by_id: 'leader-1',
+      })
+      .mockResolvedValueOnce(null);
+    githubService.getRepoCommits.mockResolvedValue([
+      { author: 'alice' },
+      { author: 'bob' },
+    ]);
+    reviewSessionRepo.find.mockResolvedValue([
+      {
+        id: 'session-1',
+        group_id: 'group-1',
+        review_date: new Date('2026-03-20T09:00:00.000Z'),
+        review_day: '2026-03-20',
+        milestone_code: ReviewMilestoneCode.REVIEW_2,
+        status: ReviewSessionStatus.COMPLETED,
+        title: 'Attendance check',
+        lecturer_note: null,
+        what_done_since_last_review: null,
+        next_plan_until_next_review: null,
+        previous_problem_followup: null,
+        current_problems: [],
+        attendance_ratio: null,
+        attendance_records: [
+          { user_id: 'student-1', user_name: 'A', present: true },
+          { user_id: 'student-2', user_name: 'B', present: true },
+          { user_id: 'student-3', user_name: 'C', present: false },
+        ],
+        previous_session_id: null,
+      },
+    ]);
+    groupReviewRepo.findOne.mockResolvedValue(null);
+
+    const result = await service.upsertCurrentGroupReview(
+      'group-1',
+      'lecturer-1',
+      Role.LECTURER,
+      {
+        scoring_formula: ReviewScoringFormula.ATTENDANCE_ONLY,
+      },
+    );
+
+    expect(result.group.scoring?.metrics.attendance_ratio).toBeCloseTo(0.67, 2);
+    expect(result.group.scores.auto_score).toBeCloseTo(6.7, 1);
   });
 
   it('rejects not-done problems without note and requires override reason for final score override', async () => {
