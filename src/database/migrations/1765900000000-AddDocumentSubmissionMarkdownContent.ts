@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddDocumentSubmissionMarkdownContent1765900000000
-  implements MigrationInterface
-{
+export class AddDocumentSubmissionMarkdownContent1765900000000 implements MigrationInterface {
   name = 'AddDocumentSubmissionMarkdownContent1765900000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
