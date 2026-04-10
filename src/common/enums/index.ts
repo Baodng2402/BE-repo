@@ -13,6 +13,7 @@ export { ReviewSessionAuditAction } from './review-session-audit-action.enum';
 export { ReviewSessionStatus } from './review-session-status.enum';
 export { Role } from './role.enum';
 export { SemesterStatus } from './semester-status.enum';
+export { SrsVersionStatus } from './srs-version-status.enum';
 export { TaskJiraSyncStatus } from './task-jira-sync-status.enum';
 export { TaskPriority } from './task-priority.enum';
 export { TaskStatus } from './task-status.enum';

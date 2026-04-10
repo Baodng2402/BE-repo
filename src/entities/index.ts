@@ -4,6 +4,7 @@ export {
   IntegrationProvider,
   MembershipRole,
   Role,
+  SrsVersionStatus,
 } from '../common/enums';
 export * from './class-checkpoint.entity';
 export * from './class-membership.entity';
@@ -26,6 +27,9 @@ export * from './project-link.entity';
 export * from './review-session.entity';
 export * from './review-session-audit-log.entity';
 export * from './semester-week-audit-log.entity';
+export * from './srs-document.entity';
+export * from './srs-version.entity';
+export * from './message.entity';
 export * from './semester.entity';
 export * from './task.entity';
 export * from './teaching-assignment.entity';

@@ -5,12 +5,14 @@ import {
   JoinColumn,
   ManyToOne,
   OneToMany,
+  OneToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { GroupStatus } from '../common/enums';
 import { Class } from './class.entity';
 import { DocumentSubmission } from './document-submission.entity';
+import { SrsDocument } from './srs-document.entity';
 import { Evaluation } from './evaluation.entity';
 import { GroupMembership } from './group-membership.entity';
 import { GroupReview } from './group-review.entity';
@@ -81,4 +83,7 @@ export class Group {
 
   @OneToMany(() => GroupReview, (review) => review.group)
   reviews: GroupReview[];
+
+  @OneToOne(() => SrsDocument, (srsDoc) => srsDoc.group)
+  srsDocument: SrsDocument;
 }
