@@ -9,6 +9,7 @@ export { MembershipRole } from './membership-role.enum';
 export { ReviewMilestoneCode } from './review-milestone-code.enum';
 export { Role } from './role.enum';
 export { SemesterStatus } from './semester-status.enum';
+export { SrsVersionStatus } from './srs-version-status.enum';
 export { TaskPriority } from './task-priority.enum';
 export { TaskJiraSyncStatus } from './task-jira-sync-status.enum';
 export { TaskStatus } from './task-status.enum';

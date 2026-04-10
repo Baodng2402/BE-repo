@@ -95,6 +95,20 @@ export const ERROR_MESSAGES = {
     CONTRIBUTION_NOT_FOUND:
       'Your contribution was not found in this evaluation',
   },
+  SRS: {
+    DOCUMENT_NOT_FOUND: 'SRS document not found for this group',
+    VERSION_NOT_FOUND: 'SRS version not found',
+    NO_DRAFT_CONTENT: 'No draft content to create a version from',
+    NOT_GROUP_MEMBER: 'You are not a member of this group',
+    ONLY_LEADER_CAN_SUBMIT:
+      'Only the group leader can submit versions for review',
+    ONLY_LEADER_CAN_CREATE_VERSION: 'Only the group leader can create versions',
+    ALREADY_HAS_PENDING_SUBMISSION:
+      'This document already has a version pending review',
+    VERSION_NOT_SUBMITTED: 'Only submitted versions can be reviewed',
+    INVALID_REVIEW_STATUS:
+      'Review status must be APPROVED or CHANGES_REQUESTED',
+  },
   VALIDATION: {
     INVALID_EMAIL: 'Invalid email format',
     PASSWORD_TOO_SHORT: 'Password must be at least 6 characters',
